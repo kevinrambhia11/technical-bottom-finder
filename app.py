@@ -60,18 +60,24 @@ APP_CSS = """
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
     :root {
-        --bg: #070b12;
-        --panel: rgba(15, 23, 42, 0.78);
-        --panel-soft: rgba(15, 23, 42, 0.52);
-        --border: rgba(148, 163, 184, 0.18);
-        --border-strong: rgba(148, 163, 184, 0.30);
+        --bg: #05070d;
+        --bg-2: #090d16;
+        --panel: rgba(12, 18, 30, 0.78);
+        --panel-2: rgba(17, 24, 39, 0.66);
+        --panel-3: rgba(2, 6, 23, 0.52);
+        --border: rgba(197, 164, 92, 0.16);
+        --border-soft: rgba(148, 163, 184, 0.12);
         --text: #f8fafc;
-        --muted: #94a3b8;
+        --muted: #9aa7bd;
         --muted-2: #64748b;
-        --green: #22c55e;
-        --amber: #f59e0b;
-        --red: #ef4444;
-        --blue: #60a5fa;
+        --gold: #d6b46a;
+        --gold-soft: rgba(214, 180, 106, 0.14);
+        --green: #4ade80;
+        --green-soft: rgba(74, 222, 128, 0.11);
+        --amber: #fbbf24;
+        --amber-soft: rgba(251, 191, 36, 0.11);
+        --slate-soft: rgba(148, 163, 184, 0.10);
+        --blue: #93c5fd;
     }
 
     html, body, [class*="css"] {
@@ -80,86 +86,140 @@ APP_CSS = """
 
     .stApp {
         background:
-            radial-gradient(circle at 20% 0%, rgba(37, 99, 235, 0.14), transparent 28%),
-            radial-gradient(circle at 90% 10%, rgba(16, 185, 129, 0.08), transparent 24%),
-            #070b12;
+            radial-gradient(circle at 20% -10%, rgba(214, 180, 106, 0.13), transparent 30%),
+            radial-gradient(circle at 88% 8%, rgba(59, 130, 246, 0.12), transparent 28%),
+            linear-gradient(180deg, #05070d 0%, #080b12 46%, #05070d 100%);
+        color: var(--text);
     }
 
     .block-container {
-        padding-top: 1.2rem;
+        padding-top: 1.25rem;
         padding-bottom: 3rem;
-        max-width: 1320px;
+        max-width: 1280px;
     }
 
-    h1, h2, h3 {
-        letter-spacing: -0.035em;
+    h1 {
+        font-weight: 800;
+        letter-spacing: -0.055em;
+        font-size: 2.25rem !important;
+        margin-bottom: 0.15rem;
+    }
+
+    h2, h3 {
+        letter-spacing: -0.04em;
+        font-weight: 760;
+    }
+
+    h4 {
+        letter-spacing: -0.025em;
+        font-weight: 720;
+    }
+
+    p, li, label, div {
+        text-rendering: geometricPrecision;
+    }
+
+    section[data-testid="stSidebar"] {
+        background:
+            linear-gradient(180deg, rgba(7, 10, 20, 0.98), rgba(2, 6, 23, 0.98)),
+            radial-gradient(circle at top, rgba(214, 180, 106, 0.09), transparent 35%);
+        border-right: 1px solid rgba(214, 180, 106, 0.12);
+        box-shadow: 18px 0 55px rgba(0, 0, 0, 0.25);
+    }
+
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3,
+    section[data-testid="stSidebar"] .stMarkdown h1,
+    section[data-testid="stSidebar"] .stMarkdown h2,
+    section[data-testid="stSidebar"] .stMarkdown h3 {
+        color: #f8fafc;
+        font-size: 1.02rem !important;
+        letter-spacing: -0.025em;
+        margin-top: 1.15rem;
+        margin-bottom: 0.55rem;
+    }
+
+    section[data-testid="stSidebar"] label p {
+        color: #cbd5e1;
+        font-weight: 650;
+        font-size: 0.86rem;
     }
 
     div[data-testid="stMetric"] {
-        background: rgba(15, 23, 42, 0.64);
+        background: linear-gradient(180deg, rgba(16, 23, 38, 0.82), rgba(8, 13, 24, 0.82));
         border: 1px solid var(--border);
         padding: 14px 16px;
         border-radius: 18px;
-        box-shadow: 0 12px 30px rgba(0,0,0,0.12);
+        box-shadow: 0 16px 34px rgba(0,0,0,0.18);
     }
 
     div[data-testid="stMetricLabel"] p {
         color: var(--muted);
-        font-weight: 500;
+        font-weight: 560;
     }
 
     div[data-testid="stMetricValue"] {
-        font-weight: 750;
-        letter-spacing: -0.03em;
+        font-weight: 780;
+        letter-spacing: -0.035em;
     }
 
     .hero-card {
         background:
-            linear-gradient(135deg, rgba(30, 41, 59, 0.96), rgba(2, 6, 23, 0.92)),
-            radial-gradient(circle at top left, rgba(96, 165, 250, 0.20), transparent 34%);
-        border: 1px solid rgba(96, 165, 250, 0.22);
-        border-radius: 28px;
-        padding: 28px 32px;
-        margin: 10px 0 20px 0;
-        box-shadow: 0 24px 70px rgba(0,0,0,0.24);
+            linear-gradient(135deg, rgba(17, 24, 39, 0.96), rgba(3, 7, 18, 0.94)),
+            radial-gradient(circle at 5% 0%, rgba(214, 180, 106, 0.18), transparent 38%);
+        border: 1px solid rgba(214, 180, 106, 0.20);
+        border-radius: 30px;
+        padding: 30px 34px;
+        margin: 10px 0 24px 0;
+        box-shadow: 0 28px 80px rgba(0,0,0,0.30);
     }
 
     .classification-card {
-        background: rgba(15, 23, 42, 0.62);
-        border: 1px solid var(--border);
+        background: rgba(12, 18, 30, 0.64);
+        border: 1px solid var(--border-soft);
         border-radius: 22px;
         padding: 18px 20px;
         margin: 14px 0 18px 0;
     }
 
     .section-card {
-        background: rgba(15, 23, 42, 0.54);
-        border: 1px solid var(--border);
-        border-radius: 22px;
-        padding: 20px 22px;
-        margin: 16px 0;
-        box-shadow: 0 10px 28px rgba(0,0,0,0.10);
+        background: linear-gradient(180deg, rgba(12, 18, 30, 0.72), rgba(8, 13, 24, 0.68));
+        border: 1px solid var(--border-soft);
+        border-radius: 24px;
+        padding: 22px 24px;
+        margin: 18px 0;
+        box-shadow: 0 18px 40px rgba(0,0,0,0.16);
     }
 
     .signal-card {
-        background: rgba(15, 23, 42, 0.58);
-        border: 1px solid var(--border);
-        border-radius: 18px;
-        padding: 15px 16px;
-        min-height: 132px;
+        background:
+            linear-gradient(180deg, rgba(15, 23, 42, 0.72), rgba(8, 13, 24, 0.72));
+        border: 1px solid rgba(148, 163, 184, 0.12);
+        border-radius: 20px;
+        padding: 16px 17px;
+        min-height: 124px;
         margin-bottom: 12px;
+        box-shadow: 0 14px 34px rgba(0, 0, 0, 0.16);
+        transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    }
+
+    .signal-card:hover {
+        transform: translateY(-1px);
+        border-color: rgba(214, 180, 106, 0.26);
+        background: linear-gradient(180deg, rgba(20, 30, 48, 0.78), rgba(8, 13, 24, 0.76));
     }
 
     .signal-pass {
-        border-left: 4px solid var(--green);
+        border-top: 1px solid rgba(74, 222, 128, 0.35);
+        box-shadow: inset 0 1px 0 rgba(74, 222, 128, 0.13), 0 14px 34px rgba(0,0,0,0.16);
     }
 
     .signal-fail {
-        border-left: 4px solid var(--muted-2);
+        border-top: 1px solid rgba(148, 163, 184, 0.22);
     }
 
     .signal-mixed {
-        border-left: 4px solid var(--amber);
+        border-top: 1px solid rgba(251, 191, 36, 0.32);
     }
 
     .small-muted {
@@ -169,17 +229,18 @@ APP_CSS = """
     }
 
     .micro-muted {
-        color: var(--muted-2);
-        font-size: 0.80rem;
+        color: var(--gold);
+        opacity: 0.82;
+        font-size: 0.72rem;
         text-transform: uppercase;
-        letter-spacing: 0.08em;
-        font-weight: 700;
+        letter-spacing: 0.13em;
+        font-weight: 800;
     }
 
     .big-level {
-        font-size: 1.35rem;
-        font-weight: 800;
-        letter-spacing: -0.035em;
+        font-size: 1.38rem;
+        font-weight: 820;
+        letter-spacing: -0.04em;
     }
 
     .pill {
@@ -187,48 +248,108 @@ APP_CSS = """
         align-items:center;
         padding: 5px 10px;
         border-radius: 999px;
-        border: 1px solid var(--border-strong);
-        background: rgba(15, 23, 42, 0.72);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: rgba(2, 6, 23, 0.45);
         color: var(--muted);
-        font-size: 0.82rem;
-        font-weight: 650;
+        font-size: 0.80rem;
+        font-weight: 750;
         margin-right: 8px;
         margin-bottom: 8px;
     }
 
-    .pill-green { color: #86efac; border-color: rgba(34, 197, 94, 0.35); }
-    .pill-amber { color: #fcd34d; border-color: rgba(245, 158, 11, 0.35); }
-    .pill-slate { color: #cbd5e1; border-color: rgba(148, 163, 184, 0.25); }
+    .pill-green { color: #86efac; border-color: rgba(74, 222, 128, 0.35); background: var(--green-soft); }
+    .pill-amber { color: #fde68a; border-color: rgba(251, 191, 36, 0.36); background: var(--amber-soft); }
+    .pill-slate { color: #cbd5e1; border-color: rgba(148, 163, 184, 0.22); background: var(--slate-soft); }
+    .pill-gold { color: #f5e6b8; border-color: rgba(214, 180, 106, 0.36); background: var(--gold-soft); }
 
     .explain-box {
-        background: rgba(2, 6, 23, 0.42);
-        border: 1px solid rgba(148, 163, 184, 0.16);
+        background: linear-gradient(180deg, rgba(2, 6, 23, 0.56), rgba(12, 18, 30, 0.48));
+        border: 1px solid rgba(214, 180, 106, 0.14);
         border-radius: 18px;
         padding: 15px 16px;
         color: #cbd5e1;
-        line-height: 1.55;
+        line-height: 1.58;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    .insight-panel {
+        background: rgba(7, 12, 22, 0.42);
+        border: 1px solid rgba(214, 180, 106, 0.10);
+        border-radius: 24px;
+        padding: 18px 18px 8px 18px;
+        min-height: 100%;
     }
 
     .stTabs [data-baseweb="tab-list"] {
-        gap: 6px;
-        border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+        gap: 8px;
+        border-bottom: 1px solid rgba(214, 180, 106, 0.13);
     }
 
     .stTabs [data-baseweb="tab"] {
         border-radius: 999px 999px 0 0;
-        padding: 10px 16px;
-        font-weight: 650;
+        padding: 10px 18px;
+        font-weight: 700;
+        color: #94a3b8;
     }
 
-    section[data-testid="stSidebar"] {
-        background: rgba(2, 6, 23, 0.72);
-        border-right: 1px solid rgba(148, 163, 184, 0.12);
+    .stTabs [aria-selected="true"] {
+        color: #f5e6b8 !important;
     }
 
     div[data-testid="stDataFrame"] {
         border-radius: 16px;
         overflow: hidden;
-        border: 1px solid rgba(148, 163, 184, 0.14);
+        border: 1px solid rgba(214, 180, 106, 0.12);
+    }
+
+    .stButton > button {
+        border: 1px solid rgba(214, 180, 106, 0.38) !important;
+        background: linear-gradient(135deg, #d6b46a, #8b6f34) !important;
+        color: #070b12 !important;
+        font-weight: 800 !important;
+        border-radius: 14px !important;
+        padding: 0.62rem 1.05rem !important;
+        box-shadow: 0 12px 26px rgba(214, 180, 106, 0.16) !important;
+    }
+
+    .stButton > button:hover {
+        border-color: rgba(245, 230, 184, 0.65) !important;
+        filter: brightness(1.06);
+    }
+
+    div[data-baseweb="input"], div[data-baseweb="select"] > div, div[data-baseweb="popover"] {
+        background-color: rgba(7, 12, 22, 0.95) !important;
+        border-color: rgba(214, 180, 106, 0.12) !important;
+        border-radius: 14px !important;
+    }
+
+    div[data-baseweb="tag"] {
+        background: rgba(214, 180, 106, 0.16) !important;
+        border: 1px solid rgba(214, 180, 106, 0.28) !important;
+        color: #f5e6b8 !important;
+        border-radius: 999px !important;
+        font-weight: 700 !important;
+    }
+
+    div[data-baseweb="tag"] span {
+        color: #f5e6b8 !important;
+    }
+
+    div[data-testid="stSlider"] [role="slider"] {
+        background: #d6b46a !important;
+        border-color: #f5e6b8 !important;
+    }
+
+    div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div {
+        background-color: rgba(214, 180, 106, 0.35) !important;
+    }
+
+    .stCheckbox [data-testid="stWidgetLabel"] p {
+        color: #cbd5e1;
+    }
+
+    details {
+        border-radius: 18px !important;
     }
 </style>
 """
@@ -544,6 +665,45 @@ def add_yearly_anchored_vwap(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def add_rolling_low_anchored_vwap(df: pd.DataFrame, lookback: int, column_name: str) -> pd.DataFrame:
+    """Add AVWAP anchored to the lowest low within a rolling lookback window.
+
+    This is useful for bottom analysis because the AVWAP from a major low often
+    acts as a dynamic cost-basis reference after a reversal. The latest value is
+    the most important, but the function creates a series so it can also be
+    plotted later if required.
+    """
+    out = df.copy()
+    if len(out) < max(30, lookback // 2):
+        out[column_name] = np.nan
+        return out
+
+    typical_price = (out["High"] + out["Low"] + out["Close"]) / 3
+    pv = (typical_price * out["Volume"]).astype(float).values
+    vol = out["Volume"].astype(float).values
+    lows = out["Low"].astype(float).values
+
+    cum_pv = np.cumsum(np.nan_to_num(pv, nan=0.0))
+    cum_vol = np.cumsum(np.nan_to_num(vol, nan=0.0))
+    values = np.full(len(out), np.nan)
+
+    for i in range(len(out)):
+        start = max(0, i - lookback + 1)
+        if i - start + 1 < 20:
+            continue
+        window_lows = lows[start:i + 1]
+        if np.all(np.isnan(window_lows)):
+            continue
+        anchor = start + int(np.nanargmin(window_lows))
+        pv_sum = cum_pv[i] - (cum_pv[anchor - 1] if anchor > 0 else 0.0)
+        vol_sum = cum_vol[i] - (cum_vol[anchor - 1] if anchor > 0 else 0.0)
+        if vol_sum > 0:
+            values[i] = pv_sum / vol_sum
+
+    out[column_name] = values
+    return out
+
+
 def add_obv(df: pd.DataFrame) -> pd.DataFrame:
     """Add On-Balance Volume and a short moving average for OBV trend checks."""
     out = df.copy()
@@ -656,6 +816,8 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["Drawdown_52W"] = df["Close"] / df["Rolling_52W_High"] - 1
 
     df = add_yearly_anchored_vwap(df)
+    df = add_rolling_low_anchored_vwap(df, lookback=252, column_name="AVWAP_52W_Low")
+    df = add_rolling_low_anchored_vwap(df, lookback=504, column_name="AVWAP_2Y_Low")
     df = add_obv(df)
     df = add_historical_volatility(df)
     df = add_atr_compression_metrics(df)
@@ -913,6 +1075,106 @@ def fibonacci_support_levels(df: pd.DataFrame, lookback: int = 504) -> List[Dict
     return rows
 
 
+def classic_pivot_support_levels(df: pd.DataFrame) -> List[Dict[str, object]]:
+    """Return classic weekly/monthly pivot support levels from completed periods."""
+    rows: List[Dict[str, object]] = []
+
+    def add_from_resample(rule: str, label: str) -> None:
+        resampled = resample_ohlcv(df, rule)
+        if len(resampled) < 3:
+            return
+        # Use the prior completed period to avoid using the current incomplete period.
+        period = resampled.iloc[-2]
+        high = float(period["High"])
+        low = float(period["Low"])
+        close = float(period["Close"])
+        if high <= low or low <= 0:
+            return
+        pivot = (high + low + close) / 3
+        s1 = 2 * pivot - high
+        s2 = pivot - (high - low)
+        s3 = low - 2 * (high - pivot)
+        for name, level, weight in [
+            (f"{label} Pivot", pivot, 1.2),
+            (f"{label} S1", s1, 1.6),
+            (f"{label} S2", s2, 2.0),
+            (f"{label} S3", s3, 1.6),
+        ]:
+            rows.append(
+                {
+                    "name": name,
+                    "level": float(level),
+                    "weight": weight,
+                    "category": "Classic pivots",
+                    "reason": f"Classic {label.lower()} pivot support/resistance reference from the prior completed period.",
+                }
+            )
+
+    add_from_resample("W-FRI", "Weekly")
+    add_from_resample("ME", "Monthly")
+    return rows
+
+
+def trendline_support_level(df: pd.DataFrame, lookback: int = 252) -> Optional[Dict[str, object]]:
+    """Project a simple trendline support from recent rising swing lows."""
+    recent = df.tail(lookback).copy()
+    swings = find_swing_lows(recent, window=5)
+    if swings.empty or len(swings) < 2:
+        return None
+
+    # Prefer the most recent pair of rising swing lows.
+    for idx in range(len(swings) - 1, 0, -1):
+        first = swings.iloc[idx - 1]
+        second = swings.iloc[idx]
+        if float(second["Price"]) <= float(first["Price"]):
+            continue
+        x1 = recent.index.get_loc(first["Date"])
+        x2 = recent.index.get_loc(second["Date"])
+        if x2 <= x1:
+            continue
+        y1 = float(first["Price"])
+        y2 = float(second["Price"])
+        slope = (y2 - y1) / (x2 - x1)
+        projected = y2 + slope * ((len(recent) - 1) - x2)
+        if projected > 0:
+            return {
+                "name": "Rising swing-low trendline",
+                "level": float(projected),
+                "weight": 2.0,
+                "category": "Trendline support",
+                "reason": "Projected support from the most recent pair of rising swing lows.",
+            }
+    return None
+
+
+def bullish_gap_support_levels(df: pd.DataFrame, lookback: int = 252, max_levels: int = 5) -> List[Dict[str, object]]:
+    """Find nearby bullish gap zones that may act as support on pullbacks."""
+    recent = df.tail(lookback).copy()
+    if len(recent) < 3:
+        return []
+
+    current_price = float(recent["Close"].iloc[-1])
+    rows: List[Dict[str, object]] = []
+    for i in range(1, len(recent)):
+        prev_high = float(recent["High"].iloc[i - 1])
+        curr_low = float(recent["Low"].iloc[i])
+        if curr_low > prev_high:
+            gap_center = (prev_high + curr_low) / 2
+            if gap_center <= current_price * 1.02:
+                rows.append(
+                    {
+                        "name": "Bullish gap support",
+                        "level": float(gap_center),
+                        "weight": 1.4,
+                        "category": "Gap support",
+                        "reason": f"Prior bullish gap zone from {recent.index[i].strftime('%Y-%m-%d')}.",
+                    }
+                )
+
+    rows = sorted(rows, key=lambda r: abs(current_price - float(r["level"])))[:max_levels]
+    return rows
+
+
 def build_support_components(
     df: pd.DataFrame,
     support_zone: Optional[Zone],
@@ -933,9 +1195,12 @@ def build_support_components(
             return
         if math.isnan(level_float) or level_float <= 0:
             return
-        # Retain nearby support references. Allow slightly above current price
-        # because some reclaim/reference levels can sit just above price.
-        if not (current_price * 0.60 <= level_float <= current_price * 1.12):
+        # Support references should generally sit below current price. A level
+        # slightly above price is allowed only if it is within normal noise,
+        # because it may represent a reclaim level rather than true resistance.
+        if level_float > current_price + 0.50 * atr:
+            return
+        if level_float < current_price * 0.55:
             return
         distance_atr = abs(current_price - level_float) / max(atr, 1e-9)
         proximity_score = max(0.20, 1 - min(distance_atr / 5, 0.80))
@@ -987,6 +1252,8 @@ def build_support_components(
         ("50-DMA", latest.get("SMA50", np.nan), 2.0, "Moving average", "Intermediate trend reference."),
         ("200-DMA", latest.get("SMA200", np.nan), 3.0, "Moving average", "Long-term institutional trend reference."),
         ("Yearly anchored VWAP", latest.get("Yearly_AVWAP", np.nan), 3.0, "VWAP", "Current-year volume-weighted cost-basis reference."),
+        ("AVWAP from 52-week low", latest.get("AVWAP_52W_Low", np.nan), 3.2, "Anchored VWAP", "Volume-weighted cost basis anchored to the lowest low of the last 52 weeks."),
+        ("AVWAP from 2-year low", latest.get("AVWAP_2Y_Low", np.nan), 3.5, "Anchored VWAP", "Volume-weighted cost basis anchored to the lowest low of the last two years."),
         ("2Y regression lower band", latest.get("LRC_Lower_2Y", np.nan), 2.5, "Regression channel", "Lower band of the 2-year linear regression channel."),
         ("2Y regression midline", latest.get("LRC_Mid_2Y", np.nan), 1.5, "Regression channel", "Midline of the 2-year linear regression channel."),
         ("Lower Bollinger Band", latest.get("BB_Lower", np.nan), 1.5, "Volatility band", "Lower 20-day Bollinger Band."),
@@ -1003,6 +1270,46 @@ def build_support_components(
         "Long-cycle moving average",
         "Long-cycle support level widely watched by trend followers.",
     )
+
+    # Additional independent support references for more robust bottom-zone estimation.
+    for vp_lookback, vp_weight in [(126, 3.0), (504, 3.8)]:
+        extra_vp = volume_profile_zone(df, lookback=min(vp_lookback, len(df)), bins=40)
+        if extra_vp:
+            add_component(
+                f"Volume profile {vp_lookback}D node",
+                extra_vp.center,
+                vp_weight,
+                "Volume profile",
+                f"High-volume price node from the last {vp_lookback} trading days.",
+            )
+
+    trendline_ref = trendline_support_level(df, lookback=min(252, len(df)))
+    if trendline_ref:
+        add_component(
+            str(trendline_ref["name"]),
+            trendline_ref["level"],
+            float(trendline_ref["weight"]),
+            str(trendline_ref["category"]),
+            str(trendline_ref["reason"]),
+        )
+
+    for pivot in classic_pivot_support_levels(df):
+        add_component(
+            str(pivot["name"]),
+            pivot["level"],
+            float(pivot["weight"]),
+            str(pivot["category"]),
+            str(pivot["reason"]),
+        )
+
+    for gap in bullish_gap_support_levels(df, lookback=min(252, len(df))):
+        add_component(
+            str(gap["name"]),
+            gap["level"],
+            float(gap["weight"]),
+            str(gap["category"]),
+            str(gap["reason"]),
+        )
 
     for fib in fibonacci_support_levels(df, lookback=min(504, len(df))):
         add_component(
@@ -1091,7 +1398,7 @@ def robust_support_confluence(
     else:
         # Prefer support near/below price, but allow levels just above price if they
         # are part of a reclaim/confluence area.
-        eligible = [c for c in clusters if c["center"] <= current_price * 1.08]
+        eligible = [c for c in clusters if c["center"] <= current_price + 0.50 * atr]
         if not eligible:
             eligible = clusters
         selected = sorted(eligible, key=lambda c: c["cluster_score"], reverse=True)[0]
@@ -1896,6 +2203,101 @@ def active_constituents_on(constituents: pd.DataFrame, as_of_date: pd.Timestamp)
     return active.sort_values("Ticker")
 
 
+def market_structure_reversal_signal(df: pd.DataFrame, lookback: int = 160) -> SignalResult:
+    """Detect higher-low / breakout structure that often follows a bottom."""
+    recent = df.tail(lookback).copy()
+    if len(recent) < 50:
+        return SignalResult("Market structure reversal", 0, 15, False, "Not enough data to evaluate market structure reversal.")
+
+    lows = find_swing_lows(recent, window=5)
+    highs = find_swing_highs(recent, window=5)
+    if len(lows) < 2 or highs.empty:
+        return SignalResult("Market structure reversal", 0, 15, False, "Not enough swing highs/lows to confirm a market-structure reversal.")
+
+    last_low = lows.iloc[-1]
+    prev_low = lows.iloc[-2]
+    higher_low = float(last_low["Price"]) > float(prev_low["Price"])
+    latest_close = float(recent["Close"].iloc[-1])
+
+    # Prior swing high after the previous low and before/around the last low is the neckline/pivot to reclaim.
+    pivot_highs = highs[highs["Date"] > prev_low["Date"]]
+    pivot_level = float(pivot_highs["Price"].max()) if not pivot_highs.empty else np.nan
+
+    if higher_low and not math.isnan(pivot_level) and latest_close > pivot_level:
+        return SignalResult(
+            "Market structure reversal",
+            15,
+            15,
+            True,
+            f"Market structure has improved: price formed a higher swing low and closed above the recent pivot high near {pivot_level:.2f}.",
+        )
+    if higher_low:
+        return SignalResult(
+            "Market structure reversal",
+            8,
+            15,
+            True,
+            f"Price has formed a higher swing low ({prev_low['Price']:.2f} → {last_low['Price']:.2f}), but pivot-high breakout is not confirmed yet.",
+        )
+
+    return SignalResult(
+        "Market structure reversal",
+        0,
+        15,
+        False,
+        "No higher-low / pivot-breakout market structure reversal is confirmed yet.",
+    )
+
+
+def anchored_vwap_reclaim_signal(df: pd.DataFrame) -> SignalResult:
+    """Evaluate reclaim/hold above AVWAPs anchored to major lows."""
+    x = df.dropna(subset=["Close", "AVWAP_52W_Low", "AVWAP_2Y_Low"]).copy()
+    if len(x) < 2:
+        return SignalResult("Major-low anchored VWAP", 0, 10, False, "Not enough data to evaluate AVWAP from major lows.")
+
+    latest = x.iloc[-1]
+    prev = x.iloc[-2]
+    close = float(latest["Close"])
+    avwap_52w = float(latest["AVWAP_52W_Low"])
+    avwap_2y = float(latest["AVWAP_2Y_Low"])
+    prev_below = float(prev["Close"]) <= float(prev["AVWAP_52W_Low"]) or float(prev["Close"]) <= float(prev["AVWAP_2Y_Low"])
+    above_both = close > avwap_52w and close > avwap_2y
+    above_one = close > avwap_52w or close > avwap_2y
+
+    if above_both and prev_below:
+        return SignalResult(
+            "Major-low anchored VWAP",
+            10,
+            10,
+            True,
+            f"Price reclaimed/holds above both major-low AVWAPs: 52W low AVWAP {avwap_52w:.2f}, 2Y low AVWAP {avwap_2y:.2f}.",
+        )
+    if above_both:
+        return SignalResult(
+            "Major-low anchored VWAP",
+            7,
+            10,
+            True,
+            f"Price is above both major-low AVWAPs: 52W low AVWAP {avwap_52w:.2f}, 2Y low AVWAP {avwap_2y:.2f}.",
+        )
+    if above_one:
+        return SignalResult(
+            "Major-low anchored VWAP",
+            4,
+            10,
+            True,
+            "Price is above one major-low anchored VWAP, but not both.",
+        )
+
+    return SignalResult(
+        "Major-low anchored VWAP",
+        0,
+        10,
+        False,
+        f"Price is below major-low AVWAP references: 52W low AVWAP {avwap_52w:.2f}, 2Y low AVWAP {avwap_2y:.2f}.",
+    )
+
+
 # -----------------------------------------------------------------------------
 # Technical bottom scoring model
 # -----------------------------------------------------------------------------
@@ -1961,6 +2363,8 @@ def calculate_bottom_score(
     obv_signal = obv_trend_break_signal(x)
     hv_signal = historical_volatility_percentile_signal(x)
     atr_compression = atr_compression_signal(x)
+    market_structure_signal = market_structure_reversal_signal(x)
+    major_low_avwap_signal = anchored_vwap_reclaim_signal(x)
     liquidity_details = {}
     slippage_details = {}
     market_regime_details = {}
@@ -2221,6 +2625,12 @@ def calculate_bottom_score(
 
     # 23. ATR compression
     signals.append(atr_compression)
+
+    # 24. Market structure reversal
+    signals.append(market_structure_signal)
+
+    # 25. Major-low anchored VWAP
+    signals.append(major_low_avwap_signal)
 
     if include_production_filters:
         # 23. Liquidity filter
@@ -2611,7 +3021,7 @@ def render_indicator_cards(signals: List[SignalResult]) -> None:
     cols = st.columns(3)
     for col, (title, group, pill_class) in zip(cols, groups):
         with col:
-            st.markdown(f"#### {title}")
+            st.markdown(f"<div class='insight-panel'><h4 style='margin-top:0;'>{title}</h4>", unsafe_allow_html=True)
             if not group:
                 st.markdown("<div class='small-muted'>None</div>", unsafe_allow_html=True)
             for s in group:
@@ -2621,13 +3031,14 @@ def render_indicator_cards(signals: List[SignalResult]) -> None:
                     f"""
                     <div class="signal-card {card_class}">
                         <div class="micro-muted">{status}</div>
-                        <div style="font-size:1.02rem;font-weight:750;margin-top:4px;">{s.name}</div>
-                        <div style="margin:7px 0 8px 0;"><span class="pill {pill_class}">{s.points:.1f} / {s.max_points:.0f}</span></div>
-                        <div style="line-height:1.45;color:#cbd5e1;">{s.explanation}</div>
+                        <div style="font-size:0.98rem;font-weight:760;margin-top:4px;letter-spacing:-0.02em;">{s.name}</div>
+                        <div style="margin:8px 0 8px 0;"><span class="pill {pill_class}">{s.points:.1f} / {s.max_points:.0f}</span></div>
+                        <div style="line-height:1.48;color:#d8dee9;font-size:0.92rem;">{s.explanation}</div>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
+            st.markdown("</div>", unsafe_allow_html=True)
 
     with st.expander("View every indicator read", expanded=False):
         st.dataframe(build_indicator_verdict_df(signals), use_container_width=True, hide_index=True)
@@ -2764,9 +3175,13 @@ def render_calculation_breakdown(
            - rolling lows
            - moving averages
            - yearly anchored VWAP
+           - AVWAP from 52-week low and 2-year low
            - 2-year regression channel levels
            - 200-week SMA
            - Fibonacci retracement levels
+           - weekly/monthly classic pivot levels
+           - rising swing-low trendline support
+           - nearby bullish gap support
 
         2. Cluster nearby support references
 
@@ -2924,6 +3339,8 @@ def render_calculation_breakdown(
         {"Metric": "50-DMA", "Value": latest.get("SMA50", np.nan)},
         {"Metric": "200-DMA", "Value": latest.get("SMA200", np.nan)},
         {"Metric": "Yearly Anchored VWAP", "Value": latest.get("Yearly_AVWAP", np.nan)},
+        {"Metric": "AVWAP from 52W Low", "Value": latest.get("AVWAP_52W_Low", np.nan)},
+        {"Metric": "AVWAP from 2Y Low", "Value": latest.get("AVWAP_2Y_Low", np.nan)},
         {"Metric": "2Y LRC Lower", "Value": latest.get("LRC_Lower_2Y", np.nan)},
         {"Metric": "2Y LRC Mid", "Value": latest.get("LRC_Mid_2Y", np.nan)},
         {"Metric": "2Y LRC Upper", "Value": latest.get("LRC_Upper_2Y", np.nan)},
@@ -2970,6 +3387,8 @@ def plot_price_chart(
         "SMA50": ("SMA50", "50-DMA"),
         "SMA200": ("SMA200", "200-DMA"),
         "Yearly anchored VWAP": ("Yearly_AVWAP", "Yearly AVWAP"),
+        "AVWAP from 52W low": ("AVWAP_52W_Low", "AVWAP 52W Low"),
+        "AVWAP from 2Y low": ("AVWAP_2Y_Low", "AVWAP 2Y Low"),
         "2Y regression midline": ("LRC_Mid_2Y", "2Y LRC Mid"),
         "2Y regression upper band": ("LRC_Upper_2Y", "2Y LRC Upper"),
         "2Y regression lower band": ("LRC_Lower_2Y", "2Y LRC Lower"),
@@ -3110,8 +3529,13 @@ def plot_price_with_200w(df: pd.DataFrame) -> go.Figure:
 def plot_avwap(df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df.index, y=df["Close"], mode="lines", name="Close"))
-    fig.add_trace(go.Scatter(x=df.index, y=df["Yearly_AVWAP"], mode="lines", name="Yearly Anchored VWAP"))
-    fig.update_layout(height=360, title="Yearly Anchored VWAP", margin=dict(l=20, r=20, t=45, b=20))
+    if "Yearly_AVWAP" in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df["Yearly_AVWAP"], mode="lines", name="Yearly AVWAP"))
+    if "AVWAP_52W_Low" in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df["AVWAP_52W_Low"], mode="lines", name="AVWAP from 52W Low"))
+    if "AVWAP_2Y_Low" in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df["AVWAP_2Y_Low"], mode="lines", name="AVWAP from 2Y Low"))
+    fig.update_layout(height=360, title="Anchored VWAP References", margin=dict(l=20, r=20, t=45, b=20))
     return fig
 
 
@@ -3339,6 +3763,8 @@ def main() -> None:
                 "SMA50",
                 "SMA200",
                 "Yearly anchored VWAP",
+                "AVWAP from 52W low",
+                "AVWAP from 2Y low",
                 "2Y regression midline",
                 "2Y regression upper band",
                 "2Y regression lower band",
