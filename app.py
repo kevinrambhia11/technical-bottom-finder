@@ -3741,8 +3741,19 @@ def display_mtf_states(states: Dict[str, Dict[str, object]]) -> None:
 
 def main() -> None:
     st.markdown(APP_CSS, unsafe_allow_html=True)
-    st.title("AI Technical Bottom Finder")
-    st.caption("A scrollable technical-bottom dashboard with indicator-by-indicator verdicts, support-zone estimation, confirmation quality, and dedicated charts.")
+    st.markdown(
+        """
+        <div style="margin: 4px 0 22px 0;">
+            <div class="micro-muted">Technical Analysis Dashboard</div>
+            <h1 style="margin: 4px 0 6px 0;">Bottom Support Zone Analyzer</h1>
+            <div class="small-muted" style="max-width:980px;line-height:1.55;">
+                Estimates probable technical bottom support zones using support confluence, volume profile,
+                volatility-adjusted ranges, momentum confirmation, and historical signal quality.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     with st.sidebar:
         st.header("Inputs")
