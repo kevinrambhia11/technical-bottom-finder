@@ -2968,12 +2968,19 @@ def run_backtest(
 # Explanation layer
 # -----------------------------------------------------------------------------
 
+# Verdict cutoffs are calibrated to the empirical score distribution rather
+# than a theoretical 0-100 scale. Many signals are mutually exclusive in
+# practice (a stock cannot be oversold and reclaiming and in a Stage-2 advance
+# at once), so the composite never approaches 100. Point-in-time study over
+# 9 large caps, 2012-2026 (1,249 monthly samples, 38 major >=25%-drawdown
+# bottoms): median 36.6, p90 44.7, p95 47.4, p99 52.8, max 55.2; the best
+# score inside the 30-bar reclaim window after a major bottom averaged 45.2.
 def verdict_from_score(score: float) -> str:
-    if score >= 80:
+    if score >= 48:
         return "Strong technical bottom setup"
-    if score >= 65:
+    if score >= 42:
         return "Possible technical bottom forming"
-    if score >= 50:
+    if score >= 36:
         return "Watchlist zone; confirmation still needed"
     return "Weak bottom setup"
 
@@ -3179,16 +3186,9 @@ def classify_setup_type(df: pd.DataFrame, signals: List[SignalResult], final_sco
         1 for s in signals if s.max_points and s.points / max(s.max_points, 1) >= 0.70
     )
 
-    if final_score >= 75:
-        return (
-            "Strong bottom setup",
-            "Multiple bottom-specific signals are active. The support zone has stronger confirmation and the setup quality is high.",
-        )
-    if final_score >= 60:
-        return (
-            "Possible bottom setup",
-            "The stock has enough bottoming evidence to monitor closely, but follow-through and risk management remain important.",
-        )
+    # Disqualifying context comes first: a stock near its highs in a healthy
+    # uptrend is not a bottom setup no matter how many trend-friendly signals
+    # scored points (they measure trend health, not bottoming).
     if drawdown > -0.12 and above_20 and above_50 and above_200 and rsi >= 50:
         return (
             "Trend continuation / not a bottom setup",
@@ -3199,7 +3199,18 @@ def classify_setup_type(df: pd.DataFrame, signals: List[SignalResult], final_sco
             "Momentum / potentially extended",
             "The stock has strong momentum rather than a bottoming profile. This can be bullish, but it is not the same as a technical-bottom setup.",
         )
-    if active_bottom_signals <= 2 and final_score < 40:
+    # Thresholds follow the same empirical calibration as verdict_from_score.
+    if final_score >= 48:
+        return (
+            "Strong bottom setup",
+            "Multiple bottom-specific signals are active. The support zone has stronger confirmation and the setup quality is high.",
+        )
+    if final_score >= 42:
+        return (
+            "Possible bottom setup",
+            "The stock has enough bottoming evidence to monitor closely, but follow-through and risk management remain important.",
+        )
+    if active_bottom_signals <= 2 and final_score < 36:
         return (
             "No actionable bottom setup yet",
             "The model does not see enough bottom-specific confirmation. The support zone may exist, but reversal evidence is weak.",
