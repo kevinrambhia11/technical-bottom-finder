@@ -2985,6 +2985,24 @@ def verdict_from_score(score: float) -> str:
     return "Weak bottom setup"
 
 
+# Setup-type labels that mean "this is not a bottoming situation." The bottom
+# score can be lifted into a bottom-suggesting band by long-cycle trend signals
+# (200-week SMA held, Coppock rising, Stage-2 advance, anchored VWAPs above) on
+# a stock that is actually in a healthy uptrend — so the headline verdict must
+# defer to these disqualifiers rather than contradict them.
+NON_BOTTOM_SETUP_TYPES = {
+    "Trend continuation / not a bottom setup",
+    "Momentum / potentially extended",
+}
+
+
+def reconciled_verdict(score: float, setup_type: str) -> str:
+    """Headline verdict that respects the setup-type disqualifiers."""
+    if setup_type in NON_BOTTOM_SETUP_TYPES:
+        return "Not a bottom setup (uptrend / momentum)"
+    return verdict_from_score(score)
+
+
 def generate_explanation(
     ticker: str,
     final_score: float,
@@ -2992,6 +3010,7 @@ def generate_explanation(
     backtest: BacktestResult,
     signals: List[SignalResult],
     context: Dict[str, object],
+    setup_type: str = "",
 ) -> str:
     """Generate a deterministic AI-style explanation.
 
@@ -3014,8 +3033,9 @@ def generate_explanation(
     text = []
     text.append(f"### AI Technical View for {ticker.upper()}")
     text.append("")
+    headline = reconciled_verdict(final_score, setup_type) if setup_type else verdict_from_score(final_score)
     text.append(
-        f"The model classifies this as **{verdict_from_score(final_score)}**. "
+        f"The model classifies this as **{headline}**. "
         f"The base technical score is **{base_score:.1f}/100**, and the backtest-adjusted confidence score is "
         f"**{final_score:.1f}/100**."
     )
@@ -3233,7 +3253,7 @@ def render_final_verdict_card(
     setup_type: str,
     setup_summary: str,
 ) -> None:
-    verdict = verdict_from_score(final_score)
+    verdict = reconciled_verdict(final_score, setup_type)
     st.markdown(
         f"""
         <div class="hero-card">
@@ -4142,6 +4162,7 @@ def main() -> None:
             backtest=backtest,
             signals=signals,
             context=context,
+            setup_type=setup_type,
         )
         st.markdown(explanation)
 
