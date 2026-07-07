@@ -36,7 +36,7 @@ import json
 import math
 import sqlite3
 import warnings
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -48,7 +48,7 @@ import streamlit as st
 import yfinance as yf
 from sklearn.cluster import DBSCAN
 
-warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 
 # -----------------------------------------------------------------------------
@@ -396,13 +396,27 @@ class BacktestResult:
     sample_size: int
     avg_max_drawdown: float
     confidence_adjustment: float
+    # Unconditional (random-entry) stats over the same period/horizon, used as
+    # the baseline the signal must beat before earning a confidence boost.
+    baseline_hit_rate: float = 0.0
+    baseline_avg_return: float = 0.0
+
+
+# Columns that must be non-NaN for the scoring engine to run. Defined once so
+# the pre-checks in the UI, the cached pipeline, and the batch runner can never
+# disagree with each other.
+CORE_REQUIRED_COLUMNS = [
+    "Open", "High", "Low", "Close", "Volume", "SMA20", "RSI14", "MACD_Hist",
+    "ATR14", "BB_Lower", "Volume_Ratio", "Rolling_52W_Low", "Drawdown_52W",
+]
 
 
 # -----------------------------------------------------------------------------
 # Database storage for daily monitoring
 # -----------------------------------------------------------------------------
 
-DB_PATH = Path("technical_bottom_signals.db")
+# Anchor to the script directory so the store does not fragment across launch CWDs.
+DB_PATH = Path(__file__).resolve().parent / "technical_bottom_signals.db"
 
 
 def init_signal_db(db_path: Path = DB_PATH) -> None:
@@ -466,13 +480,15 @@ def save_signal_record(
             "sample_size": backtest.sample_size,
             "avg_max_drawdown": backtest.avg_max_drawdown,
             "confidence_adjustment": backtest.confidence_adjustment,
+            "baseline_hit_rate": backtest.baseline_hit_rate,
+            "baseline_avg_return": backtest.baseline_avg_return,
         },
     }
 
     row = (
         ticker.upper(),
         pd.to_datetime(signal_date).strftime("%Y-%m-%d"),
-        datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         float(latest_close),
         float(base_score),
         float(final_score),
@@ -537,16 +553,27 @@ def load_signal_history(db_path: Path = DB_PATH, limit: int = 500) -> pd.DataFra
 # -----------------------------------------------------------------------------
 
 @st.cache_data(show_spinner=False, ttl=60 * 30)
-def fetch_ohlcv(ticker: str, period: str = "5y", interval: str = "1d") -> pd.DataFrame:
-    """Fetch OHLCV data from Yahoo Finance using yfinance."""
-    df = yf.download(
-        ticker,
-        period=period,
+def fetch_ohlcv(
+    ticker: str,
+    period: str = "5y",
+    interval: str = "1d",
+    start: Optional[str] = None,
+) -> pd.DataFrame:
+    """Fetch OHLCV data from Yahoo Finance using yfinance.
+
+    When `start` is given it takes precedence over `period`, which allows the
+    caller to request extra warm-up history beyond the named period.
+    """
+    kwargs = dict(
         interval=interval,
         auto_adjust=True,
         progress=False,
         group_by="column",
     )
+    if start:
+        df = yf.download(ticker, start=start, **kwargs)
+    else:
+        df = yf.download(ticker, period=period, **kwargs)
 
     if df is None or df.empty:
         return pd.DataFrame()
@@ -565,8 +592,13 @@ def fetch_ohlcv(ticker: str, period: str = "5y", interval: str = "1d") -> pd.Dat
     return df
 
 
-def resample_ohlcv(df: pd.DataFrame, rule: str) -> pd.DataFrame:
-    """Resample daily OHLCV into weekly/monthly candles."""
+def resample_ohlcv(df: pd.DataFrame, rule: str, completed_only: bool = False) -> pd.DataFrame:
+    """Resample daily OHLCV into weekly/monthly candles.
+
+    With completed_only=True the current in-progress period is dropped so that
+    signals evaluated on the latest bar cannot repaint intra-period (e.g. a
+    "weekly MACD cross" seen on a Tuesday that un-crosses by Friday).
+    """
     if df.empty:
         return df
 
@@ -576,7 +608,11 @@ def resample_ohlcv(df: pd.DataFrame, rule: str) -> pd.DataFrame:
     out["Low"] = df["Low"].resample(rule).min()
     out["Close"] = df["Close"].resample(rule).last()
     out["Volume"] = df["Volume"].resample(rule).sum()
-    return out.dropna()
+    out = out.dropna()
+
+    if completed_only and len(out) and df.index.max() < out.index.max():
+        out = out.iloc[:-1]
+    return out
 
 
 # -----------------------------------------------------------------------------
@@ -808,7 +844,10 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["BB_Lower"] = df["BB_Mid"] - 2 * df["BB_Std"]
 
     df["Volume_SMA20"] = sma(df["Volume"], 20)
-    df["Volume_Ratio"] = df["Volume"] / df["Volume_SMA20"]
+    # Zero-volume tickers (indices, FX) would otherwise produce 0/0 = NaN on
+    # every row and wipe out the whole frame in the core dropna.
+    volume_ratio = df["Volume"] / df["Volume_SMA20"]
+    df["Volume_Ratio"] = volume_ratio.mask(df["Volume_SMA20"] == 0, 0.0)
 
     df["Ret_1D"] = df["Close"].pct_change()
     df["Rolling_52W_High"] = df["High"].rolling(252).max()
@@ -824,6 +863,39 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = add_linear_regression_channel(df, window=504, deviations=2.0)
 
     return df
+
+
+PERIOD_YEARS = {"2y": 2, "5y": 5, "10y": 10}
+
+# Long rolling windows (252-day rolling extremes, 504-day regression/AVWAP,
+# 252-day percentile ranks) consume the first ~2 years of rows as NaN warm-up.
+INDICATOR_WARMUP_YEARS = 3
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 30)
+def load_analysis_frame(ticker: str, period: str) -> pd.DataFrame:
+    """Fetch history with a warm-up buffer, add indicators, trim to the requested window.
+
+    Fetching extra history and trimming after indicator calculation keeps every
+    row of the requested window usable. Without this, a '2y' request loses its
+    first 251 rows to rolling-window warm-up and can never satisfy the model's
+    minimum-history requirement.
+    """
+    years = PERIOD_YEARS.get(period)
+    if years is None:
+        raw = fetch_ohlcv(ticker, period="max")
+        return add_indicators(raw) if not raw.empty else raw
+
+    start = (pd.Timestamp.today() - pd.DateOffset(years=years + INDICATOR_WARMUP_YEARS)).strftime("%Y-%m-%d")
+    raw = fetch_ohlcv(ticker, period=period, start=start)
+    if raw.empty:
+        return raw
+
+    df = add_indicators(raw)
+    cutoff = pd.Timestamp.today() - pd.DateOffset(years=years)
+    trimmed = df[df.index >= cutoff]
+    # If the ticker is too young for the warm-up buffer, fall back to everything.
+    return trimmed if len(trimmed) >= 260 else df
 
 
 # -----------------------------------------------------------------------------
@@ -1025,7 +1097,7 @@ def volume_profile_zone(df: pd.DataFrame, lookback: int = 252, bins: int = 40) -
 
 def get_200_week_sma_level(daily_df: pd.DataFrame) -> Optional[float]:
     """Return latest 200-week SMA level if enough weekly history exists."""
-    weekly = resample_ohlcv(daily_df, "W-FRI")
+    weekly = resample_ohlcv(daily_df, "W-FRI", completed_only=True)
     if len(weekly) < 205:
         return None
     sma200w = weekly["Close"].rolling(200).mean().dropna()
@@ -1455,13 +1527,17 @@ def robust_support_confluence(
 # RSI bullish divergence
 # -----------------------------------------------------------------------------
 
-def detect_rsi_bullish_divergence(df: pd.DataFrame, lookback: int = 120) -> Tuple[bool, str]:
-    """Detect bullish divergence: price makes lower low, RSI makes higher low."""
+def detect_rsi_bullish_divergence(df: pd.DataFrame, lookback: int = 120) -> Tuple[Optional[bool], str]:
+    """Detect bullish divergence: price makes lower low, RSI makes higher low.
+
+    Returns None (instead of False) when there is not enough data to evaluate,
+    so the caller can exclude the signal from scoring rather than count a miss.
+    """
     recent = df.tail(lookback).copy()
     swings = find_swing_lows(recent, window=4)
 
     if swings.empty or len(swings) < 2:
-        return False, "Not enough swing lows to evaluate RSI divergence."
+        return None, "Not enough swing lows to evaluate RSI divergence."
 
     last_two = swings.tail(2)
     first = last_two.iloc[0]
@@ -1558,7 +1634,10 @@ def timeframe_state(df: pd.DataFrame) -> Dict[str, object]:
         }
 
     required_cols = ["Close", "SMA20", "RSI14", "MACD_Hist", "BB_Lower"]
-    x = add_indicators(df).dropna(subset=required_cols).copy()
+    # The daily frame already carries every indicator; only resampled frames
+    # need a fresh indicator pass.
+    source = df if all(c in df.columns for c in required_cols) else add_indicators(df)
+    x = source.dropna(subset=required_cols).copy()
     if len(x) < 5:
         return {
             "valid": False,
@@ -1600,8 +1679,8 @@ def timeframe_state(df: pd.DataFrame) -> Dict[str, object]:
 
 def multi_timeframe_confirmation(daily_df: pd.DataFrame) -> Tuple[float, Dict[str, Dict[str, object]]]:
     """Check daily, weekly, and monthly confirmation."""
-    weekly = resample_ohlcv(daily_df, "W-FRI")
-    monthly = resample_ohlcv(daily_df, "ME")
+    weekly = resample_ohlcv(daily_df, "W-FRI", completed_only=True)
+    monthly = resample_ohlcv(daily_df, "ME", completed_only=True)
 
     states = {
         "Daily": timeframe_state(daily_df),
@@ -1609,10 +1688,13 @@ def multi_timeframe_confirmation(daily_df: pd.DataFrame) -> Tuple[float, Dict[st
         "Monthly": timeframe_state(monthly),
     }
 
+    # Daily conditions (SMA20, RSI, MACD histogram, Bollinger) are already
+    # scored as standalone signals in calculate_bottom_score, so the daily leg
+    # is shown in the table but carries no weight here to avoid double-counting.
     weights = {
-        "Daily": 0.40,
-        "Weekly": 0.40,
-        "Monthly": 0.20,
+        "Daily": 0.0,
+        "Weekly": 0.65,
+        "Monthly": 0.35,
     }
 
     weighted = 0.0
@@ -1633,17 +1715,20 @@ def multi_timeframe_confirmation(daily_df: pd.DataFrame) -> Tuple[float, Dict[st
 # Advanced bottom indicators
 # -----------------------------------------------------------------------------
 
-def detect_weekly_rsi_bullish_divergence(daily_df: pd.DataFrame, lookback_weeks: int = 156) -> Tuple[bool, str]:
-    """Detect bullish RSI divergence on weekly candles."""
-    weekly = resample_ohlcv(daily_df, "W-FRI")
+def detect_weekly_rsi_bullish_divergence(daily_df: pd.DataFrame, lookback_weeks: int = 156) -> Tuple[Optional[bool], str]:
+    """Detect bullish RSI divergence on weekly candles.
+
+    Returns None when there is not enough data to evaluate.
+    """
+    weekly = resample_ohlcv(daily_df, "W-FRI", completed_only=True)
     if len(weekly) < 60:
-        return False, "Not enough weekly history to evaluate weekly RSI divergence."
+        return None, "Not enough weekly history to evaluate weekly RSI divergence."
 
     weekly = add_indicators(weekly).dropna(subset=["RSI14", "Low"]).tail(lookback_weeks)
     swings = find_swing_lows(weekly, window=3)
 
     if swings.empty or len(swings) < 2:
-        return False, "Not enough weekly swing lows to evaluate weekly RSI divergence."
+        return None, "Not enough weekly swing lows to evaluate weekly RSI divergence."
 
     first = swings.iloc[-2]
     second = swings.iloc[-1]
@@ -1663,12 +1748,12 @@ def detect_weekly_rsi_bullish_divergence(daily_df: pd.DataFrame, lookback_weeks:
 
 def weekly_200_sma_signal(daily_df: pd.DataFrame) -> SignalResult:
     """Evaluate the 200-week SMA as a long-cycle support/reclaim level."""
-    weekly = resample_ohlcv(daily_df, "W-FRI")
+    weekly = resample_ohlcv(daily_df, "W-FRI", completed_only=True)
     if len(weekly) < 205:
         return SignalResult(
             "200-week SMA",
             0,
-            10,
+            0,
             False,
             "Not enough weekly history to calculate a reliable 200-week SMA.",
         )
@@ -1718,7 +1803,7 @@ def yearly_anchored_vwap_signal(df: pd.DataFrame) -> SignalResult:
     """Evaluate yearly anchored VWAP reclaim/support."""
     x = df.dropna(subset=["Yearly_AVWAP", "ATR14"]).copy()
     if len(x) < 2:
-        return SignalResult("Yearly anchored VWAP", 0, 8, False, "Not enough data to evaluate yearly anchored VWAP.")
+        return SignalResult("Yearly anchored VWAP", 0, 0, False, "Not enough data to evaluate yearly anchored VWAP.")
 
     latest = x.iloc[-1]
     prev = x.iloc[-2]
@@ -1740,7 +1825,7 @@ def linear_regression_channel_signal(df: pd.DataFrame) -> SignalResult:
     """Evaluate price position inside the 2-year linear regression channel."""
     x = df.dropna(subset=["LRC_Lower_2Y", "LRC_Mid_2Y", "LRC_Upper_2Y", "LRC_Position_2Y"]).copy()
     if len(x) < 2:
-        return SignalResult("2-year linear regression channel", 0, 10, False, "Not enough history to calculate the 2-year linear regression channel.")
+        return SignalResult("2-year linear regression channel", 0, 0, False, "Not enough history to calculate the 2-year linear regression channel.")
 
     latest = x.iloc[-1]
     prev = x.iloc[-2]
@@ -1765,9 +1850,9 @@ def coppock_curve_signal(daily_df: pd.DataFrame) -> SignalResult:
     Standard approximation: 10-period weighted moving average of the sum of
     14-month and 11-month rate of change.
     """
-    monthly = resample_ohlcv(daily_df, "ME")
+    monthly = resample_ohlcv(daily_df, "ME", completed_only=True)
     if len(monthly) < 30:
-        return SignalResult("Coppock Curve", 0, 10, False, "Not enough monthly history to calculate the Coppock Curve.")
+        return SignalResult("Coppock Curve", 0, 0, False, "Not enough monthly history to calculate the Coppock Curve.")
 
     close = monthly["Close"]
     roc14 = close.pct_change(14) * 100
@@ -1776,7 +1861,7 @@ def coppock_curve_signal(daily_df: pd.DataFrame) -> SignalResult:
     monthly = monthly.assign(Coppock=coppock).dropna()
 
     if len(monthly) < 3:
-        return SignalResult("Coppock Curve", 0, 10, False, "Not enough valid Coppock Curve history.")
+        return SignalResult("Coppock Curve", 0, 0, False, "Not enough valid Coppock Curve history.")
 
     latest = float(monthly["Coppock"].iloc[-1])
     prev = float(monthly["Coppock"].iloc[-2])
@@ -1794,9 +1879,9 @@ def coppock_curve_signal(daily_df: pd.DataFrame) -> SignalResult:
 
 def weekly_macd_bullish_cross_signal(daily_df: pd.DataFrame) -> SignalResult:
     """Detect a weekly MACD bullish cross."""
-    weekly = add_indicators(resample_ohlcv(daily_df, "W-FRI")).dropna(subset=["MACD", "MACD_Signal", "MACD_Hist"])
+    weekly = add_indicators(resample_ohlcv(daily_df, "W-FRI", completed_only=True)).dropna(subset=["MACD", "MACD_Signal", "MACD_Hist"])
     if len(weekly) < 3:
-        return SignalResult("Weekly MACD bullish cross", 0, 10, False, "Not enough weekly data to evaluate weekly MACD.")
+        return SignalResult("Weekly MACD bullish cross", 0, 0, False, "Not enough weekly data to evaluate weekly MACD.")
 
     latest = weekly.iloc[-1]
     prev = weekly.iloc[-2]
@@ -1813,9 +1898,9 @@ def weekly_macd_bullish_cross_signal(daily_df: pd.DataFrame) -> SignalResult:
 
 def stage_analysis_signal(daily_df: pd.DataFrame) -> Tuple[SignalResult, Dict[str, object]]:
     """Stan Weinstein-style stage analysis using weekly closes and the 30-week SMA."""
-    weekly = resample_ohlcv(daily_df, "W-FRI")
+    weekly = resample_ohlcv(daily_df, "W-FRI", completed_only=True)
     if len(weekly) < 40:
-        return SignalResult("Stage Analysis", 0, 10, False, "Not enough weekly history for Stage Analysis."), {}
+        return SignalResult("Stage Analysis", 0, 0, False, "Not enough weekly history for Stage Analysis."), {}
 
     weekly["SMA10W"] = weekly["Close"].rolling(10).mean()
     weekly["SMA30W"] = weekly["Close"].rolling(30).mean()
@@ -1823,13 +1908,13 @@ def stage_analysis_signal(daily_df: pd.DataFrame) -> Tuple[SignalResult, Dict[st
     weekly = weekly.dropna(subset=["SMA30W"])
 
     if len(weekly) < 12:
-        return SignalResult("Stage Analysis", 0, 10, False, "Not enough valid weekly moving-average history for Stage Analysis."), {}
+        return SignalResult("Stage Analysis", 0, 0, False, "Not enough valid weekly moving-average history for Stage Analysis."), {}
 
     latest = weekly.iloc[-1]
     close = float(latest["Close"])
     sma30 = float(latest["SMA30W"])
     sma10 = float(latest["SMA10W"]) if not pd.isna(latest["SMA10W"]) else np.nan
-    sma30_10w_ago = float(weekly["SMA30W"].iloc[-10])
+    sma30_10w_ago = float(weekly["SMA30W"].iloc[-11])
     slope_10w = sma30 / sma30_10w_ago - 1 if sma30_10w_ago else 0
     above_30w = close > sma30
     flattening = abs(slope_10w) <= 0.03
@@ -1869,7 +1954,7 @@ def obv_trend_break_signal(df: pd.DataFrame) -> SignalResult:
     """Detect whether OBV has broken above a recent trend/accumulation range."""
     x = df.dropna(subset=["OBV", "OBV_EMA20", "OBV_Rolling_High20"]).copy()
     if len(x) < 30:
-        return SignalResult("OBV trend break", 0, 10, False, "Not enough OBV history to evaluate trend break.")
+        return SignalResult("OBV trend break", 0, 0, False, "Not enough OBV history to evaluate trend break.")
 
     latest = x.iloc[-1]
     prev = x.iloc[-2]
@@ -1890,7 +1975,7 @@ def historical_volatility_percentile_signal(df: pd.DataFrame) -> SignalResult:
     """Evaluate historical volatility percentile for bottom-quality context."""
     x = df.dropna(subset=["HV20", "HV20_Pctile_252"]).copy()
     if len(x) < 30:
-        return SignalResult("HV percentile", 0, 8, False, "Not enough historical volatility data to calculate percentile.")
+        return SignalResult("HV percentile", 0, 0, False, "Not enough historical volatility data to calculate percentile.")
 
     latest = x.iloc[-1]
     pct = float(latest["HV20_Pctile_252"])
@@ -1911,7 +1996,7 @@ def atr_compression_signal(df: pd.DataFrame) -> SignalResult:
     """Evaluate ATR compression after a decline."""
     x = df.dropna(subset=["ATR_Pct", "ATR_Pct_SMA20", "ATR_Pctile_252"]).copy()
     if len(x) < 30:
-        return SignalResult("ATR compression", 0, 8, False, "Not enough ATR history to evaluate compression.")
+        return SignalResult("ATR compression", 0, 0, False, "Not enough ATR history to evaluate compression.")
 
     latest = x.iloc[-1]
     atr_pct = float(latest["ATR_Pct"])
@@ -1939,7 +2024,7 @@ def liquidity_filter_signal(
     """Check whether the stock is liquid enough for the strategy."""
     x = df.dropna(subset=["Close", "Volume", "ATR_Pct"]).copy()
     if len(x) < 20:
-        return SignalResult("Liquidity filter", 0, 10, False, "Not enough data to evaluate liquidity."), {}
+        return SignalResult("Liquidity filter", 0, 0, False, "Not enough data to evaluate liquidity."), {}
 
     recent = x.tail(20)
     avg_volume_20 = float(recent["Volume"].mean())
@@ -1972,14 +2057,14 @@ def slippage_filter_signal(df: pd.DataFrame, order_value: float) -> Tuple[Signal
     """Estimate rough slippage using order size, average traded value, and ATR%."""
     x = df.dropna(subset=["Close", "Volume", "ATR_Pct"]).copy()
     if len(x) < 20:
-        return SignalResult("Slippage filter", 0, 8, False, "Not enough data to estimate slippage."), {}
+        return SignalResult("Slippage filter", 0, 0, False, "Not enough data to estimate slippage."), {}
 
     recent = x.tail(20)
     avg_traded_value_20 = float((recent["Close"] * recent["Volume"]).mean())
     atr_pct = float(x["ATR_Pct"].iloc[-1])
 
     if avg_traded_value_20 <= 0:
-        return SignalResult("Slippage filter", 0, 8, False, "Average traded value is not available for slippage estimation."), {}
+        return SignalResult("Slippage filter", 0, 0, False, "Average traded value is not available for slippage estimation."), {}
 
     participation = max(order_value, 0) / avg_traded_value_20
 
@@ -2024,7 +2109,7 @@ def sector_relative_strength_signal(stock_df: pd.DataFrame, sector_df: Optional[
 
     merged = pd.DataFrame({"Stock": stock_df["Close"], "Sector": sector_df["Close"]}).dropna()
     if len(merged) < 220:
-        return SignalResult("Sector-relative strength", 0, 10, False, "Not enough overlapping stock/sector data for relative-strength analysis.")
+        return SignalResult("Sector-relative strength", 0, 0, False, "Not enough overlapping stock/sector data for relative-strength analysis.")
 
     merged["RS"] = merged["Stock"] / merged["Sector"]
     merged["RS_SMA50"] = merged["RS"].rolling(50).mean()
@@ -2060,7 +2145,7 @@ def market_regime_filter_signal(
 
     m = add_indicators(market_df).dropna(subset=["Close", "SMA50", "SMA200", "HV20_Pctile_252"]).copy()
     if len(m) < 260:
-        return SignalResult("Market-regime filter", 0, 12, False, "Not enough benchmark history for market-regime filtering."), {}
+        return SignalResult("Market-regime filter", 0, 0, False, "Not enough benchmark history for market-regime filtering."), {}
 
     latest = m.iloc[-1]
     close = float(latest["Close"])
@@ -2207,7 +2292,7 @@ def market_structure_reversal_signal(df: pd.DataFrame, lookback: int = 160) -> S
     """Detect higher-low / breakout structure that often follows a bottom."""
     recent = df.tail(lookback).copy()
     if len(recent) < 50:
-        return SignalResult("Market structure reversal", 0, 15, False, "Not enough data to evaluate market structure reversal.")
+        return SignalResult("Market structure reversal", 0, 0, False, "Not enough data to evaluate market structure reversal.")
 
     lows = find_swing_lows(recent, window=5)
     highs = find_swing_highs(recent, window=5)
@@ -2253,7 +2338,7 @@ def anchored_vwap_reclaim_signal(df: pd.DataFrame) -> SignalResult:
     """Evaluate reclaim/hold above AVWAPs anchored to major lows."""
     x = df.dropna(subset=["Close", "AVWAP_52W_Low", "AVWAP_2Y_Low"]).copy()
     if len(x) < 2:
-        return SignalResult("Major-low anchored VWAP", 0, 10, False, "Not enough data to evaluate AVWAP from major lows.")
+        return SignalResult("Major-low anchored VWAP", 0, 0, False, "Not enough data to evaluate AVWAP from major lows.")
 
     latest = x.iloc[-1]
     prev = x.iloc[-2]
@@ -2502,9 +2587,10 @@ def calculate_bottom_score(
         explanation = f"Stock is not in a deep correction versus its 52-week high ({latest['Drawdown_52W']:.1%})."
     signals.append(SignalResult("Deep correction context", dd_points, 10, passed, explanation))
 
-    # 8. RSI bullish divergence
+    # 8. RSI bullish divergence (excluded when not enough swing lows to evaluate)
+    div_max = 0 if divergence is None else 10
     div_points = 10 if divergence else 0
-    signals.append(SignalResult("RSI bullish divergence", div_points, 10, divergence, divergence_msg))
+    signals.append(SignalResult("RSI bullish divergence", div_points, div_max, bool(divergence), divergence_msg))
 
     # 9. Volume-profile support
     vp_points = 0.0
@@ -2553,15 +2639,18 @@ def calculate_bottom_score(
     )
     signals.append(SignalResult("Candlestick reversal", candle_points, 15, candle_passed, candle_explanation))
 
-    # 12. Multiple-timeframe confirmation
+    # 12. Multiple-timeframe confirmation (weekly/monthly only; excluded if neither is evaluable)
     mtf_passed = mtf_score >= 10
+    mtf_evaluable = any(
+        mtf_states.get(tf, {}).get("valid", False) for tf in ("Weekly", "Monthly")
+    )
     signals.append(
         SignalResult(
             "Multiple-timeframe confirmation",
             mtf_score,
-            20,
+            20 if mtf_evaluable else 0,
             mtf_passed,
-            f"Multi-timeframe confirmation score is {mtf_score:.1f}/20.",
+            f"Multi-timeframe confirmation score is {mtf_score:.1f}/20 (weekly and monthly trend alignment).",
         )
     )
 
@@ -2574,13 +2663,13 @@ def calculate_bottom_score(
     # 15. 2-year linear regression channel
     signals.append(lrc_signal)
 
-    # 16. Weekly RSI bullish divergence
+    # 16. Weekly RSI bullish divergence (excluded when not evaluable)
     signals.append(
         SignalResult(
             "Weekly RSI bullish divergence",
             10 if weekly_divergence else 0,
-            10,
-            weekly_divergence,
+            0 if weekly_divergence is None else 10,
+            bool(weekly_divergence),
             weekly_divergence_msg,
         )
     )
@@ -2591,28 +2680,9 @@ def calculate_bottom_score(
     # 18. Weekly MACD bullish cross
     signals.append(weekly_macd_cross)
 
-    # 19. Fixed-range volume profile is already included above as volume-profile support.
-    # Keep this as a named confirmation so the signal table explicitly shows it.
-    if vp_zone:
-        signals.append(
-            SignalResult(
-                "Volume Profile Fixed Range",
-                min(vp_points, 8),
-                8,
-                vp_points > 0,
-                f"Fixed-range volume profile over the lookback window identifies a high-volume node near {vp_zone.center:.2f}.",
-            )
-        )
-    else:
-        signals.append(
-            SignalResult(
-                "Volume Profile Fixed Range",
-                0,
-                8,
-                False,
-                "No reliable fixed-range volume-profile high-volume node was detected.",
-            )
-        )
+    # 19. (Removed) The fixed-range volume profile was previously scored a second
+    # time here on top of signal #9 "Volume-profile support", double-counting the
+    # same evidence. Each piece of evidence now contributes exactly once.
 
     # 20. Stan Weinstein Stage Analysis
     signals.append(stage_signal)
@@ -2782,11 +2852,17 @@ def run_backtest(
     if len(x) < 320 + forward_days:
         return BacktestResult(0, 0, 0, 0, 0, 0), pd.DataFrame()
 
-    # Avoid repeated adjacent signals by enforcing a cooldown period.
-    last_signal_i = -999
-    cooldown = max(10, forward_days // 3)
+    # Flat round-trip transaction-cost assumption (commission + spread +
+    # slippage), netted from every simulated trade and from the baseline.
+    round_trip_cost = 0.002
 
-    for i in range(260, len(x) - forward_days):
+    # Cooldown equals the holding period so forward windows never overlap.
+    # Overlapping "trades" share most of their forward window and would count
+    # highly correlated outcomes as independent samples.
+    last_signal_i = -999
+    cooldown = forward_days
+
+    for i in range(260, len(x) - forward_days - 1):
         if i - last_signal_i < cooldown:
             continue
 
@@ -2794,10 +2870,14 @@ def run_backtest(
         if pd.isna(proxy_score) or proxy_score < signal_threshold:
             continue
 
-        entry_price = float(x["Close"].iloc[i])
+        # The signal needs bar i's close and full-day volume, so the earliest
+        # realistic execution is the next bar's open.
+        entry_price = float(x["Open"].iloc[i + 1])
+        if not entry_price > 0:
+            continue
         exit_price = float(x["Close"].iloc[i + forward_days])
-        forward_window = x["Close"].iloc[i:i + forward_days + 1]
-        fwd_return = exit_price / entry_price - 1
+        forward_window = x["Close"].iloc[i + 1:i + forward_days + 1]
+        fwd_return = exit_price / entry_price - 1 - round_trip_cost
         mdd = max_drawdown_during_period(forward_window)
         success = fwd_return >= success_return
 
@@ -2814,9 +2894,20 @@ def run_backtest(
         )
         last_signal_i = i
 
+    # Unconditional baseline: forward return of entering at ANY bar's next open
+    # over the same horizon, with the same costs. A stock in a long uptrend
+    # clears +5% in 63 days from random entries most of the time — the signal
+    # only deserves credit for edge over that base rate.
+    entry_all = x["Open"].shift(-1)
+    exit_all = x["Close"].shift(-forward_days)
+    baseline_returns = (exit_all / entry_all - 1 - round_trip_cost).iloc[260:len(x) - forward_days - 1].dropna()
+    baseline_hit_rate = float((baseline_returns >= success_return).mean()) if len(baseline_returns) else 0.0
+    baseline_avg_return = float(baseline_returns.mean()) if len(baseline_returns) else 0.0
+
     trades = pd.DataFrame(records)
     if trades.empty:
-        return BacktestResult(0, 0, 0, 0, 0, -10), trades
+        # No comparable historical signals is a neutral outcome, not a penalty.
+        return BacktestResult(0, 0, 0, 0, 0, 0, baseline_hit_rate, baseline_avg_return), trades
 
     hit_rate = float(trades["Success"].mean())
     avg_forward_return = float(trades["Forward_Return"].mean())
@@ -2824,15 +2915,16 @@ def run_backtest(
     avg_max_drawdown = float(trades["Max_Drawdown"].mean())
     sample_size = int(len(trades))
 
-    # Confidence adjustment based on realized historical signal quality.
-    # This is deliberately conservative.
+    # Confidence adjustment based on EXCESS hit rate over the random-entry
+    # baseline, so drift alone cannot earn a boost. Small samples are neutral.
+    excess_hit = hit_rate - baseline_hit_rate
     if sample_size < 5:
-        confidence_adjustment = -5
-    elif hit_rate >= 0.65 and avg_forward_return > 0:
+        confidence_adjustment = 0
+    elif excess_hit >= 0.15 and avg_forward_return > baseline_avg_return:
         confidence_adjustment = 10
-    elif hit_rate >= 0.55 and avg_forward_return > 0:
+    elif excess_hit >= 0.05 and avg_forward_return > 0:
         confidence_adjustment = 5
-    elif hit_rate < 0.45 or avg_forward_return < 0:
+    elif excess_hit <= -0.10 or avg_forward_return < 0:
         confidence_adjustment = -10
     else:
         confidence_adjustment = 0
@@ -2844,6 +2936,8 @@ def run_backtest(
         sample_size=sample_size,
         avg_max_drawdown=avg_max_drawdown,
         confidence_adjustment=float(confidence_adjustment),
+        baseline_hit_rate=baseline_hit_rate,
+        baseline_avg_return=baseline_avg_return,
     )
 
     return result, trades
@@ -2917,8 +3011,10 @@ def generate_explanation(
     if backtest.sample_size > 0:
         text.append(
             f"Historically, similar proxy signals occurred **{backtest.sample_size}** times in the tested period. "
-            f"The hit rate was **{backtest.hit_rate:.1%}**, with an average forward return of "
-            f"**{backtest.avg_forward_return:.1%}** over the selected forward window."
+            f"The hit rate was **{backtest.hit_rate:.1%}**, versus a random-entry baseline of "
+            f"**{backtest.baseline_hit_rate:.1%}** over the same horizon — the confidence adjustment rewards only "
+            f"the excess over that baseline. The average forward return was **{backtest.avg_forward_return:.1%}** "
+            f"(after an assumed 0.2% round-trip cost)."
         )
     else:
         text.append(
@@ -2957,9 +3053,9 @@ def signal_status_label(signal: SignalResult) -> str:
 
 def signal_card_class(signal: SignalResult) -> str:
     label = signal_status_label(signal)
-    if label == "Supportive":
+    if label == "Bottom signal active":
         return "signal-pass"
-    if label == "Mixed":
+    if label == "Partial / mixed":
         return "signal-mixed"
     return "signal-fail"
 
@@ -2968,7 +3064,9 @@ def build_indicator_verdict_df(signals: List[SignalResult]) -> pd.DataFrame:
     rows = []
     for s in signals:
         ratio = s.points / max(s.max_points, 1) if s.max_points else 0
-        if ratio >= 0.70:
+        if not s.max_points:
+            model_read = "Excluded (not enough data)"
+        elif ratio >= 0.70:
             model_read = "Supports bottom thesis"
         elif ratio > 0:
             model_read = "Partial / early evidence"
@@ -3120,7 +3218,8 @@ def render_final_verdict_card(
             <div style="margin-top:18px;line-height:1.55;color:#cbd5e1;">
                 Base technical score: <b>{base_score:.1f}/100</b> · Backtest adjustment:
                 <b>{backtest.confidence_adjustment:+.0f}</b> · Historical proxy signals: <b>{backtest.sample_size}</b> ·
-                Hit rate: <b>{backtest.hit_rate:.1%}</b> · Average forward return: <b>{backtest.avg_forward_return:.1%}</b>
+                Hit rate: <b>{backtest.hit_rate:.1%}</b> vs random-entry baseline <b>{backtest.baseline_hit_rate:.1%}</b> ·
+                Average forward return: <b>{backtest.avg_forward_return:.1%}</b>
             </div>
         </div>
         """,
@@ -3314,7 +3413,10 @@ def render_calculation_breakdown(
     backtest_rows = [
         {"Metric": "Historical proxy signals", "Value": f"{backtest.sample_size}"},
         {"Metric": "Hit rate", "Value": f"{backtest.hit_rate:.1%}"},
-        {"Metric": "Average forward return", "Value": f"{backtest.avg_forward_return:.1%}"},
+        {"Metric": "Random-entry baseline hit rate", "Value": f"{backtest.baseline_hit_rate:.1%}"},
+        {"Metric": "Excess hit rate over baseline", "Value": f"{backtest.hit_rate - backtest.baseline_hit_rate:+.1%}"},
+        {"Metric": "Average forward return (net of 0.2% cost)", "Value": f"{backtest.avg_forward_return:.1%}"},
+        {"Metric": "Random-entry baseline avg return", "Value": f"{backtest.baseline_avg_return:.1%}"},
         {"Metric": "Median forward return", "Value": f"{backtest.median_forward_return:.1%}"},
         {"Metric": "Average max drawdown", "Value": f"{backtest.avg_max_drawdown:.1%}"},
         {"Metric": "Backtest adjustment", "Value": f"{backtest.confidence_adjustment:+.0f}"},
@@ -3696,30 +3798,6 @@ def plot_indicator_chart_grid(
 # UI helpers
 # -----------------------------------------------------------------------------
 
-def score_badge(score: float) -> str:
-    if score >= 80:
-        return "🟢 Strong"
-    if score >= 65:
-        return "🟡 Possible"
-    if score >= 50:
-        return "🟠 Watchlist"
-    return "🔴 Weak"
-
-
-def display_signal_table(signals: List[SignalResult]) -> None:
-    rows = []
-    for s in signals:
-        rows.append(
-            {
-                "Signal": s.name,
-                "Points": f"{s.points:.1f} / {s.max_points:.0f}",
-                "Passed": "Yes" if s.passed else "No",
-                "Explanation": s.explanation,
-            }
-        )
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-
 def display_mtf_states(states: Dict[str, Dict[str, object]]) -> None:
     rows = []
     for tf, state in states.items():
@@ -3733,6 +3811,83 @@ def display_mtf_states(states: Dict[str, Dict[str, object]]) -> None:
             }
         )
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+# -----------------------------------------------------------------------------
+# Cached end-to-end analysis pipeline
+# -----------------------------------------------------------------------------
+
+@st.cache_data(show_spinner=False, ttl=60 * 30)
+def run_full_analysis(
+    ticker: str,
+    period: str,
+    signal_threshold: float,
+    forward_days: int,
+    success_return: float,
+    include_production_filters: bool,
+    sector_ticker: str,
+    market_ticker: str,
+    volatility_ticker: str,
+    min_avg_volume: float,
+    min_avg_traded_value: float,
+    max_atr_pct: float,
+    order_value: float,
+) -> Dict[str, object]:
+    """Fetch, score, and backtest one ticker, cached on its true inputs.
+
+    Streamlit reruns the whole script on every widget interaction; caching the
+    pipeline here means cosmetic changes (chart overlays, lookback sliders)
+    re-render instantly instead of re-paying several seconds of computation.
+    """
+    df = load_analysis_frame(ticker, period)
+    if df.empty:
+        return {"error": "no_data"}
+
+    if float(df["Volume"].fillna(0).sum()) == 0:
+        return {"error": "no_volume"}
+
+    core_df = df.dropna(subset=[c for c in CORE_REQUIRED_COLUMNS if c in df.columns])
+    if len(core_df) < 260:
+        return {"error": "insufficient_history"}
+
+    sector_df = fetch_ohlcv(sector_ticker.strip().upper(), period=period) if sector_ticker.strip() else pd.DataFrame()
+    market_df = fetch_ohlcv(market_ticker.strip().upper(), period=period) if market_ticker.strip() else pd.DataFrame()
+    volatility_df = fetch_ohlcv(volatility_ticker.strip().upper(), period=period) if volatility_ticker.strip() else pd.DataFrame()
+
+    try:
+        base_score, signals, context = calculate_bottom_score(
+            df,
+            sector_df=sector_df if not sector_df.empty else None,
+            market_df=market_df if not market_df.empty else None,
+            volatility_df=volatility_df if not volatility_df.empty else None,
+            min_avg_volume=min_avg_volume,
+            min_avg_traded_value=min_avg_traded_value,
+            max_atr_pct=max_atr_pct,
+            order_value=order_value,
+            include_production_filters=include_production_filters,
+        )
+    except ValueError as exc:
+        return {"error": f"score: {exc}"}
+
+    backtest, trades = run_backtest(
+        df,
+        signal_threshold=signal_threshold,
+        forward_days=forward_days,
+        success_return=success_return,
+    )
+    final_score = float(np.clip(base_score + backtest.confidence_adjustment, 0, 100))
+
+    return {
+        "df": df,
+        "market_df": market_df,
+        "volatility_df": volatility_df,
+        "base_score": base_score,
+        "signals": signals,
+        "context": context,
+        "backtest": backtest,
+        "trades": trades,
+        "final_score": final_score,
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -3845,61 +4000,56 @@ def main() -> None:
     st.session_state["last_ticker"] = ticker
 
     with st.spinner("Fetching market data and calculating technical signals..."):
-        raw = fetch_ohlcv(ticker.strip().upper(), period=period, interval="1d")
+        try:
+            analysis = run_full_analysis(
+                ticker.strip().upper(),
+                period,
+                float(signal_threshold),
+                int(forward_days),
+                float(success_return),
+                bool(show_advanced_tools),
+                sector_ticker,
+                market_ticker,
+                volatility_ticker,
+                float(min_avg_volume),
+                float(min_avg_traded_value),
+                float(max_atr_pct),
+                float(order_value),
+            )
+        except Exception as exc:
+            st.error("The analysis failed unexpectedly. Details below.")
+            st.exception(exc)
+            return
 
-    if raw.empty:
-        st.error("No market data found. Check the ticker symbol or try a different period.")
+    error = analysis.get("error")
+    if error == "no_data":
+        st.error("No market data found. Check the ticker symbol (use .NS for NSE stocks) or try a different period.")
         return
-
-    df = add_indicators(raw).copy()
-    core_required_cols = [
-        "Open", "High", "Low", "Close", "Volume", "SMA20", "RSI14", "MACD_Hist",
-        "ATR14", "BB_Lower", "Volume_Ratio", "Rolling_52W_Low", "Drawdown_52W",
-    ]
-    core_df = df.dropna(subset=[c for c in core_required_cols if c in df.columns]).copy()
-
-    if len(core_df) < 260:
-        st.error("Not enough historical data after core indicator calculations. Try a longer history period. For the full model, 5y or 10y is recommended.")
-        return
-
-    sector_df = pd.DataFrame()
-    market_df = pd.DataFrame()
-    volatility_df = pd.DataFrame()
-
-    if sector_ticker.strip():
-        sector_df = fetch_ohlcv(sector_ticker.strip().upper(), period=period, interval="1d")
-
-    if market_ticker.strip():
-        market_df = fetch_ohlcv(market_ticker.strip().upper(), period=period, interval="1d")
-
-    if volatility_ticker.strip():
-        volatility_df = fetch_ohlcv(volatility_ticker.strip().upper(), period=period, interval="1d")
-
-    try:
-        base_score, signals, context = calculate_bottom_score(
-            df,
-            sector_df=sector_df if not sector_df.empty else None,
-            market_df=market_df if not market_df.empty else None,
-            volatility_df=volatility_df if not volatility_df.empty else None,
-            min_avg_volume=min_avg_volume,
-            min_avg_traded_value=min_avg_traded_value,
-            max_atr_pct=max_atr_pct,
-            order_value=order_value,
-            include_production_filters=show_advanced_tools,
+    if error == "no_volume":
+        st.error(
+            "This ticker has no traded-volume data — common for indices and FX rates. "
+            "The model depends on volume-based signals, so use a stock ticker instead."
         )
-    except Exception as exc:
-        st.error(f"Could not calculate score: {exc}")
+        return
+    if error == "insufficient_history":
+        st.error(
+            "Not enough usable history for this ticker even after the indicator warm-up buffer. "
+            "The stock may be recently listed; the model needs roughly a year of clean daily data."
+        )
+        return
+    if error:
+        st.error(f"Could not calculate score: {error}")
         return
 
-    with st.spinner("Running historical backtest..."):
-        backtest, trades = run_backtest(
-            df,
-            signal_threshold=signal_threshold,
-            forward_days=forward_days,
-            success_return=success_return,
-        )
-
-    final_score = float(np.clip(base_score + backtest.confidence_adjustment, 0, 100))
+    df = analysis["df"]
+    market_df = analysis["market_df"]
+    volatility_df = analysis["volatility_df"]
+    base_score = analysis["base_score"]
+    signals = analysis["signals"]
+    context = analysis["context"]
+    backtest = analysis["backtest"]
+    trades = analysis["trades"]
+    final_score = analysis["final_score"]
 
     if save_to_db:
         save_signal_record(
@@ -3990,8 +4140,16 @@ def main() -> None:
         st.markdown("## Backtest summary")
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Signals", f"{backtest.sample_size}")
-        c2.metric("Hit Rate", f"{backtest.hit_rate:.1%}")
-        c3.metric("Avg Forward Return", f"{backtest.avg_forward_return:.1%}")
+        c2.metric(
+            "Hit Rate",
+            f"{backtest.hit_rate:.1%}",
+            delta=f"{backtest.hit_rate - backtest.baseline_hit_rate:+.1%} vs random entry",
+        )
+        c3.metric(
+            "Avg Forward Return",
+            f"{backtest.avg_forward_return:.1%}",
+            delta=f"{backtest.avg_forward_return - backtest.baseline_avg_return:+.1%} vs random entry",
+        )
         c4.metric("Median Forward Return", f"{backtest.median_forward_return:.1%}")
         c5.metric("Confidence Adj.", f"{backtest.confidence_adjustment:+.0f}")
 
@@ -4032,13 +4190,12 @@ def main() -> None:
 
                         for idx, batch_ticker in enumerate(tickers_to_run):
                             try:
-                                batch_raw = fetch_ohlcv(batch_ticker, period=period, interval="1d")
-                                if batch_raw.empty:
+                                batch_df = load_analysis_frame(batch_ticker, period)
+                                if batch_df.empty:
                                     rows.append({"Ticker": batch_ticker, "Status": "No data"})
                                     continue
 
-                                batch_df = add_indicators(batch_raw).copy()
-                                batch_core_df = batch_df.dropna(subset=[c for c in core_required_cols if c in batch_df.columns]).copy()
+                                batch_core_df = batch_df.dropna(subset=[c for c in CORE_REQUIRED_COLUMNS if c in batch_df.columns]).copy()
                                 if len(batch_core_df) < 260:
                                     rows.append({"Ticker": batch_ticker, "Status": "Insufficient history"})
                                     continue
@@ -4052,6 +4209,9 @@ def main() -> None:
                                     min_avg_traded_value=min_avg_traded_value,
                                     max_atr_pct=max_atr_pct,
                                     order_value=order_value,
+                                    # Batch mode is only reachable with advanced tools on, so
+                                    # apply the same production filters as the single-ticker run.
+                                    include_production_filters=True,
                                 )
                                 batch_backtest, _ = run_backtest(
                                     batch_df,
