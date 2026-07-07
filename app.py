@@ -610,8 +610,18 @@ def resample_ohlcv(df: pd.DataFrame, rule: str, completed_only: bool = False) ->
     out["Volume"] = df["Volume"].resample(rule).sum()
     out = out.dropna()
 
-    if completed_only and len(out) and df.index.max() < out.index.max():
-        out = out.iloc[:-1]
+    if completed_only and len(out):
+        last_label = out.index.max()
+        if df.index.max() < last_label:
+            # Data has not reached the period end: in progress as of the data.
+            # (Deliberately conservative for holiday-shortened periods — the
+            # bar is withheld until the next period's data prints.)
+            out = out.iloc[:-1]
+        elif pd.Timestamp.now().normalize() <= last_label.normalize():
+            # Data reaches the label, but the label date is today: the session
+            # may still be open, so treat the bar as in progress. Historical
+            # slices (label long past) keep their final completed bar.
+            out = out.iloc[:-1]
     return out
 
 
@@ -2876,7 +2886,12 @@ def run_backtest(
         if not entry_price > 0:
             continue
         exit_price = float(x["Close"].iloc[i + forward_days])
-        forward_window = x["Close"].iloc[i + 1:i + forward_days + 1]
+        # Prepend the entry price so max-drawdown is measured from entry, not
+        # merely between subsequent closes (a gap-up entry would otherwise
+        # report zero drawdown while the position is under water).
+        forward_window = pd.concat(
+            [pd.Series([entry_price], index=[x.index[i]]), x["Close"].iloc[i + 1:i + forward_days + 1]]
+        )
         fwd_return = exit_price / entry_price - 1 - round_trip_cost
         mdd = max_drawdown_during_period(forward_window)
         success = fwd_return >= success_return
@@ -2899,8 +2914,14 @@ def run_backtest(
     # clears +5% in 63 days from random entries most of the time — the signal
     # only deserves credit for edge over that base rate.
     entry_all = x["Open"].shift(-1)
+    entry_all = entry_all.where(entry_all > 0)  # same bad-open guard as the trade loop
     exit_all = x["Close"].shift(-forward_days)
-    baseline_returns = (exit_all / entry_all - 1 - round_trip_cost).iloc[260:len(x) - forward_days - 1].dropna()
+    baseline_returns = (
+        (exit_all / entry_all - 1 - round_trip_cost)
+        .replace([np.inf, -np.inf], np.nan)
+        .iloc[260:len(x) - forward_days - 1]
+        .dropna()
+    )
     baseline_hit_rate = float((baseline_returns >= success_return).mean()) if len(baseline_returns) else 0.0
     baseline_avg_return = float(baseline_returns.mean()) if len(baseline_returns) else 0.0
 
@@ -2971,7 +2992,9 @@ def generate_explanation(
     data to your model.
     """
     passed = [s for s in signals if s.points > 0]
-    failed = [s for s in signals if s.points == 0]
+    # Excluded signals (max_points == 0, not enough data) are not "missing
+    # confirmations" — they were never evaluable.
+    failed = [s for s in signals if s.max_points and s.points == 0]
 
     strongest = sorted(passed, key=lambda x: x.points / max(x.max_points, 1), reverse=True)[:4]
     weakest = failed[:3]
@@ -3850,9 +3873,12 @@ def run_full_analysis(
     if len(core_df) < 260:
         return {"error": "insufficient_history"}
 
-    sector_df = fetch_ohlcv(sector_ticker.strip().upper(), period=period) if sector_ticker.strip() else pd.DataFrame()
-    market_df = fetch_ohlcv(market_ticker.strip().upper(), period=period) if market_ticker.strip() else pd.DataFrame()
-    volatility_df = fetch_ohlcv(volatility_ticker.strip().upper(), period=period) if volatility_ticker.strip() else pd.DataFrame()
+    # Benchmarks go through the same warm-up loader as the primary ticker so
+    # the market-regime filter (which needs ~270 warm-up rows for SMA200 and
+    # HV percentile) stays evaluable on shorter periods like 2y.
+    sector_df = load_analysis_frame(sector_ticker.strip().upper(), period) if sector_ticker.strip() else pd.DataFrame()
+    market_df = load_analysis_frame(market_ticker.strip().upper(), period) if market_ticker.strip() else pd.DataFrame()
+    volatility_df = load_analysis_frame(volatility_ticker.strip().upper(), period) if volatility_ticker.strip() else pd.DataFrame()
 
     try:
         base_score, signals, context = calculate_bottom_score(
@@ -4038,7 +4064,8 @@ def main() -> None:
         )
         return
     if error:
-        st.error(f"Could not calculate score: {error}")
+        detail = error[len("score: "):] if error.startswith("score: ") else error
+        st.error(f"Could not calculate score: {detail}")
         return
 
     df = analysis["df"]
@@ -4193,6 +4220,10 @@ def main() -> None:
                                 batch_df = load_analysis_frame(batch_ticker, period)
                                 if batch_df.empty:
                                     rows.append({"Ticker": batch_ticker, "Status": "No data"})
+                                    continue
+
+                                if float(batch_df["Volume"].fillna(0).sum()) == 0:
+                                    rows.append({"Ticker": batch_ticker, "Status": "No volume data"})
                                     continue
 
                                 batch_core_df = batch_df.dropna(subset=[c for c in CORE_REQUIRED_COLUMNS if c in batch_df.columns]).copy()
