@@ -1717,7 +1717,9 @@ def multi_timeframe_confirmation(daily_df: pd.DataFrame) -> Tuple[float, Dict[st
     if max_possible == 0:
         return 0.0, states
 
-    confirmation_score = weighted / max_possible * 20
+    # Higher-timeframe trend alignment is largely trend-health (it reads high in
+    # any established uptrend), so it carries a modest max of 8 rather than 20.
+    confirmation_score = weighted / max_possible * 8
     return float(confirmation_score), states
 
 
@@ -1792,9 +1794,12 @@ def weekly_200_sma_signal(daily_df: pd.DataFrame) -> SignalResult:
             f"Price is within 5% of the 200-week SMA near {sma200w:.2f}, a major long-cycle reference level.",
         )
     if close > sma200w:
+        # Merely trading above the 200-week SMA is trend health, not a bottom
+        # event — award minimal bottom credit (the reclaim/proximity tiers above
+        # carry the real weight).
         return SignalResult(
             "200-week SMA",
-            5,
+            1,
             10,
             True,
             f"Weekly price remains above the 200-week SMA near {sma200w:.2f}.",
@@ -1823,10 +1828,11 @@ def yearly_anchored_vwap_signal(df: pd.DataFrame) -> SignalResult:
 
     if close > avwap and float(prev["Close"]) <= float(prev["Yearly_AVWAP"]):
         return SignalResult("Yearly anchored VWAP", 8, 8, True, f"Price reclaimed the yearly anchored VWAP near {avwap:.2f}.")
-    if close > avwap:
-        return SignalResult("Yearly anchored VWAP", 5, 8, True, f"Price is above the yearly anchored VWAP near {avwap:.2f}.")
     if abs(close - avwap) <= atr:
         return SignalResult("Yearly anchored VWAP", 4, 8, True, f"Price is within 1 ATR of the yearly anchored VWAP near {avwap:.2f}.")
+    if close > avwap:
+        # Trading above the yearly VWAP is trend health, not a bottom event.
+        return SignalResult("Yearly anchored VWAP", 1, 8, True, f"Price is above the yearly anchored VWAP near {avwap:.2f}.")
 
     return SignalResult("Yearly anchored VWAP", 0, 8, False, f"Price is below yearly anchored VWAP near {avwap:.2f}; reclaim is not confirmed.")
 
@@ -1849,7 +1855,8 @@ def linear_regression_channel_signal(df: pd.DataFrame) -> SignalResult:
     if 0 <= position <= 0.25:
         return SignalResult("2-year linear regression channel", 7, 10, True, f"Price is in the lower quartile of the 2-year regression channel; lower band is near {lower:.2f}.")
     if close > mid:
-        return SignalResult("2-year linear regression channel", 4, 10, True, f"Price is above the 2-year regression midline near {mid:.2f}.")
+        # Being above the regression midline is trend health, not a bottom.
+        return SignalResult("2-year linear regression channel", 0, 10, False, f"Price is above the 2-year regression midline near {mid:.2f}; this is trend context, not a bottom signal.")
 
     return SignalResult("2-year linear regression channel", 0, 10, False, "Price is not near or reclaiming the lower 2-year regression channel.")
 
@@ -1881,8 +1888,11 @@ def coppock_curve_signal(daily_df: pd.DataFrame) -> SignalResult:
         return SignalResult("Coppock Curve", 10, 10, True, f"Coppock Curve crossed above zero ({latest:.2f}), a major long-term momentum reversal signal.")
     if latest > prev and prev <= prev2 and latest < 0:
         return SignalResult("Coppock Curve", 8, 10, True, f"Coppock Curve turned up from below zero ({latest:.2f}), often an early bottoming signal.")
+    if latest > prev and latest < 0:
+        return SignalResult("Coppock Curve", 5, 10, True, f"Coppock Curve is rising from negative territory ({latest:.2f}), an early bottoming turn.")
     if latest > prev:
-        return SignalResult("Coppock Curve", 5, 10, True, f"Coppock Curve is rising ({latest:.2f}), showing improving long-term momentum.")
+        # Rising while already positive is trend health, not a bottoming turn.
+        return SignalResult("Coppock Curve", 1, 10, True, f"Coppock Curve is rising while already positive ({latest:.2f}); long-term momentum is healthy but this is not a bottom signal.")
 
     return SignalResult("Coppock Curve", 0, 10, False, f"Coppock Curve is not rising yet ({latest:.2f}).")
 
@@ -1901,7 +1911,8 @@ def weekly_macd_bullish_cross_signal(daily_df: pd.DataFrame) -> SignalResult:
     if latest["MACD_Hist"] > prev["MACD_Hist"] and latest["MACD_Hist"] < 0:
         return SignalResult("Weekly MACD bullish cross", 6, 10, True, "Weekly MACD histogram is improving below zero; bullish cross is not confirmed yet.")
     if latest["MACD"] > latest["MACD_Signal"]:
-        return SignalResult("Weekly MACD bullish cross", 5, 10, True, "Weekly MACD is above its signal line, but the cross is not new.")
+        # An established (non-fresh) weekly uptrend is trend health, not a turn.
+        return SignalResult("Weekly MACD bullish cross", 1, 10, True, "Weekly MACD is above its signal line, but the cross is not new (established uptrend, not a fresh turn).")
 
     return SignalResult("Weekly MACD bullish cross", 0, 10, False, "Weekly MACD bullish cross has not occurred.")
 
@@ -1929,16 +1940,20 @@ def stage_analysis_signal(daily_df: pd.DataFrame) -> Tuple[SignalResult, Dict[st
     above_30w = close > sma30
     flattening = abs(slope_10w) <= 0.03
 
-    if above_30w and slope_10w > 0.02 and (pd.isna(sma10) or close >= sma10 * 0.97):
-        stage = "Stage 2: advancing phase"
+    if flattening and abs(close / sma30 - 1) <= 0.08:
+        # Base-building around a flattening 30-week SMA is the actual bottoming
+        # stage — this is what the model most wants to reward.
+        stage = "Stage 1: base-building phase"
         points = 10
         passed = True
-        explanation = f"Stan Weinstein Stage Analysis indicates {stage}; price is above a rising 30-week SMA near {sma30:.2f}."
-    elif flattening and abs(close / sma30 - 1) <= 0.08:
-        stage = "Stage 1: base-building phase"
-        points = 8
-        passed = True
         explanation = f"Stan Weinstein Stage Analysis indicates {stage}; price is near a flattening 30-week SMA near {sma30:.2f}."
+    elif above_30w and slope_10w > 0.02 and (pd.isna(sma10) or close >= sma10 * 0.97):
+        # A confirmed Stage-2 advance is a healthy uptrend, not a bottom — give
+        # it minimal bottom credit.
+        stage = "Stage 2: advancing phase"
+        points = 3
+        passed = True
+        explanation = f"Stan Weinstein Stage Analysis indicates {stage}; price is above a rising 30-week SMA near {sma30:.2f} (uptrend, not a bottom)."
     elif close < sma30 and slope_10w < -0.02:
         stage = "Stage 4: declining phase"
         points = 0
@@ -1974,7 +1989,9 @@ def obv_trend_break_signal(df: pd.DataFrame) -> SignalResult:
     if latest["OBV"] > prior_20_high and latest["OBV"] > latest["OBV_EMA20"]:
         return SignalResult("OBV trend break", 10, 10, True, "OBV broke above its prior 20-day high and is above its 20-day EMA, suggesting accumulation.")
     if latest["OBV"] > latest["OBV_EMA20"] and obv_slope_10 > 0:
-        return SignalResult("OBV trend break", 6, 10, True, "OBV is above its 20-day EMA and trending higher, but a breakout is not fully confirmed.")
+        # Rising OBV within an established uptrend is trend health, not the
+        # accumulation breakout that marks a bottom; award little.
+        return SignalResult("OBV trend break", 2, 10, True, "OBV is above its 20-day EMA and trending higher, but a breakout is not fully confirmed.")
     if latest["OBV"] > prev["OBV"]:
         return SignalResult("OBV trend break", 3, 10, True, "OBV improved versus the prior candle, but trend-break confirmation is weak.")
 
@@ -2314,6 +2331,21 @@ def market_structure_reversal_signal(df: pd.DataFrame, lookback: int = 160) -> S
     higher_low = float(last_low["Price"]) > float(prev_low["Price"])
     latest_close = float(recent["Close"].iloc[-1])
 
+    # A higher-low / pivot-break is only a *bottom* reversal if it followed a
+    # real decline. In an ongoing uptrend near the highs the same structure is
+    # just trend continuation, so require a prior pullback of >= 12% from the
+    # lookback high to grant full reversal credit.
+    lookback_high = float(recent["High"].max())
+    prior_correction = float(prev_low["Price"]) <= lookback_high * 0.88
+    if not prior_correction:
+        return SignalResult(
+            "Market structure reversal",
+            0,
+            15,
+            False,
+            "Higher-low structure exists, but without a prior decline it reflects trend continuation near the highs rather than a bottom reversal.",
+        )
+
     # Prior swing high after the previous low and before/around the last low is the neckline/pivot to reclaim.
     pivot_highs = highs[highs["Date"] > prev_low["Date"]]
     pivot_level = float(pivot_highs["Price"].max()) if not pivot_highs.empty else np.nan
@@ -2368,17 +2400,19 @@ def anchored_vwap_reclaim_signal(df: pd.DataFrame) -> SignalResult:
             f"Price reclaimed/holds above both major-low AVWAPs: 52W low AVWAP {avwap_52w:.2f}, 2Y low AVWAP {avwap_2y:.2f}.",
         )
     if above_both:
+        # Holding above both major-low VWAPs without a fresh reclaim is trend
+        # health (a stock well into an advance sits above these); minimal credit.
         return SignalResult(
             "Major-low anchored VWAP",
-            7,
+            2,
             10,
             True,
-            f"Price is above both major-low AVWAPs: 52W low AVWAP {avwap_52w:.2f}, 2Y low AVWAP {avwap_2y:.2f}.",
+            f"Price is above both major-low AVWAPs: 52W low AVWAP {avwap_52w:.2f}, 2Y low AVWAP {avwap_2y:.2f} (held, no fresh reclaim).",
         )
     if above_one:
         return SignalResult(
             "Major-low anchored VWAP",
-            4,
+            1,
             10,
             True,
             "Price is above one major-low anchored VWAP, but not both.",
@@ -2572,9 +2606,11 @@ def calculate_bottom_score(
         passed = True
         explanation = "Price reclaimed the 20-day moving average."
     elif latest["Close"] > latest["SMA20"]:
-        ma_points = 6
+        # A fresh reclaim (above) is the bottom event; simply sitting above the
+        # 20-DMA is trend health and fires in every uptrend, so give it little.
+        ma_points = 2
         passed = True
-        explanation = "Price is above the 20-day moving average."
+        explanation = "Price is above the 20-day moving average (already, not a fresh reclaim)."
     else:
         passed = False
         explanation = "Price has not reclaimed the 20-day moving average."
@@ -2650,7 +2686,7 @@ def calculate_bottom_score(
     signals.append(SignalResult("Candlestick reversal", candle_points, 15, candle_passed, candle_explanation))
 
     # 12. Multiple-timeframe confirmation (weekly/monthly only; excluded if neither is evaluable)
-    mtf_passed = mtf_score >= 10
+    mtf_passed = mtf_score >= 4
     mtf_evaluable = any(
         mtf_states.get(tf, {}).get("valid", False) for tf in ("Weekly", "Monthly")
     )
@@ -2658,9 +2694,9 @@ def calculate_bottom_score(
         SignalResult(
             "Multiple-timeframe confirmation",
             mtf_score,
-            20 if mtf_evaluable else 0,
+            8 if mtf_evaluable else 0,
             mtf_passed,
-            f"Multi-timeframe confirmation score is {mtf_score:.1f}/20 (weekly and monthly trend alignment).",
+            f"Multi-timeframe confirmation score is {mtf_score:.1f}/8 (weekly and monthly trend alignment).",
         )
     )
 
@@ -2971,16 +3007,19 @@ def run_backtest(
 # Verdict cutoffs are calibrated to the empirical score distribution rather
 # than a theoretical 0-100 scale. Many signals are mutually exclusive in
 # practice (a stock cannot be oversold and reclaiming and in a Stage-2 advance
-# at once), so the composite never approaches 100. Point-in-time study over
-# 9 large caps, 2012-2026 (1,249 monthly samples, 38 major >=25%-drawdown
-# bottoms): median 36.6, p90 44.7, p95 47.4, p99 52.8, max 55.2; the best
-# score inside the 30-bar reclaim window after a major bottom averaged 45.2.
+# at once), so the composite never approaches 100. After the trend-signal
+# reweighting, a point-in-time study over 9 large caps, 2012-2026 (1,249
+# monthly samples, 38 major >=25%-drawdown bottoms) gave: median 27.2, p90
+# 37.2, p95 40.0, max 53.2; deeply corrected days now outscore near-high days
+# (30.6 vs 24.4), and the best score in the 30-bar reclaim window after a
+# major bottom averaged 39.8. At these cutoffs 76% of genuine bottoms reach
+# "Possible+" in their reclaim window while only ~6% of near-high days do.
 def verdict_from_score(score: float) -> str:
-    if score >= 48:
-        return "Strong technical bottom setup"
     if score >= 42:
-        return "Possible technical bottom forming"
+        return "Strong technical bottom setup"
     if score >= 36:
+        return "Possible technical bottom forming"
+    if score >= 30:
         return "Watchlist zone; confirmation still needed"
     return "Weak bottom setup"
 
@@ -3220,17 +3259,17 @@ def classify_setup_type(df: pd.DataFrame, signals: List[SignalResult], final_sco
             "The stock has strong momentum rather than a bottoming profile. This can be bullish, but it is not the same as a technical-bottom setup.",
         )
     # Thresholds follow the same empirical calibration as verdict_from_score.
-    if final_score >= 48:
+    if final_score >= 42:
         return (
             "Strong bottom setup",
             "Multiple bottom-specific signals are active. The support zone has stronger confirmation and the setup quality is high.",
         )
-    if final_score >= 42:
+    if final_score >= 36:
         return (
             "Possible bottom setup",
             "The stock has enough bottoming evidence to monitor closely, but follow-through and risk management remain important.",
         )
-    if active_bottom_signals <= 2 and final_score < 36:
+    if active_bottom_signals <= 2 and final_score < 30:
         return (
             "No actionable bottom setup yet",
             "The model does not see enough bottom-specific confirmation. The support zone may exist, but reversal evidence is weak.",
