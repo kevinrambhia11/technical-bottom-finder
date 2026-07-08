@@ -458,9 +458,15 @@ def save_signal_record(
     signals: List[SignalResult],
     backtest: BacktestResult,
     db_path: Path = DB_PATH,
+    verdict: Optional[str] = None,
 ) -> None:
-    """Insert or update the latest signal for one ticker/date."""
+    """Insert or update the latest signal for one ticker/date.
+
+    `verdict` should be the reconciled headline (setup-type aware) so the stored
+    record matches what the UI shows; falls back to the raw score band.
+    """
     init_signal_db(db_path)
+    stored_verdict = verdict if verdict is not None else verdict_from_score(final_score)
 
     payload = {
         "signals": [
@@ -492,7 +498,7 @@ def save_signal_record(
         float(latest_close),
         float(base_score),
         float(final_score),
-        verdict_from_score(final_score),
+        stored_verdict,
         float(context["bottom_zone_lower"]),
         float(context["bottom_zone_upper"]),
         float(context["invalidation"]),
@@ -1990,10 +1996,11 @@ def obv_trend_break_signal(df: pd.DataFrame) -> SignalResult:
         return SignalResult("OBV trend break", 10, 10, True, "OBV broke above its prior 20-day high and is above its 20-day EMA, suggesting accumulation.")
     if latest["OBV"] > latest["OBV_EMA20"] and obv_slope_10 > 0:
         # Rising OBV within an established uptrend is trend health, not the
-        # accumulation breakout that marks a bottom; award little.
-        return SignalResult("OBV trend break", 2, 10, True, "OBV is above its 20-day EMA and trending higher, but a breakout is not fully confirmed.")
+        # accumulation breakout that marks a bottom; award little (but keep it
+        # >= the weaker 'ticked up vs prior candle' tier below).
+        return SignalResult("OBV trend break", 3, 10, True, "OBV is above its 20-day EMA and trending higher, but a breakout is not fully confirmed.")
     if latest["OBV"] > prev["OBV"]:
-        return SignalResult("OBV trend break", 3, 10, True, "OBV improved versus the prior candle, but trend-break confirmation is weak.")
+        return SignalResult("OBV trend break", 2, 10, True, "OBV improved versus the prior candle, but trend-break confirmation is weak.")
 
     return SignalResult("OBV trend break", 0, 10, False, "OBV has not broken its recent trend range.")
 
@@ -4133,6 +4140,8 @@ def main() -> None:
     trades = analysis["trades"]
     final_score = analysis["final_score"]
 
+    setup_type, setup_summary = classify_setup_type(df, signals, final_score)
+
     if save_to_db:
         save_signal_record(
             ticker=ticker.strip().upper(),
@@ -4143,9 +4152,8 @@ def main() -> None:
             context=context,
             signals=signals,
             backtest=backtest,
+            verdict=reconciled_verdict(final_score, setup_type),
         )
-
-    setup_type, setup_summary = classify_setup_type(df, signals, final_score)
 
     latest_close = context["current_price"]
     lower = context["bottom_zone_lower"]
@@ -4307,6 +4315,8 @@ def main() -> None:
                                     success_return=success_return,
                                 )
                                 batch_final = float(np.clip(batch_score + batch_backtest.confidence_adjustment, 0, 100))
+                                batch_setup_type, _ = classify_setup_type(batch_df, batch_signals, batch_final)
+                                batch_verdict = reconciled_verdict(batch_final, batch_setup_type)
 
                                 rows.append(
                                     {
@@ -4315,7 +4325,7 @@ def main() -> None:
                                         "Latest Close": batch_context["current_price"],
                                         "Base Score": batch_score,
                                         "Final Score": batch_final,
-                                        "Verdict": verdict_from_score(batch_final),
+                                        "Verdict": batch_verdict,
                                         "Bottom Zone Lower": batch_context["bottom_zone_lower"],
                                         "Bottom Zone Upper": batch_context["bottom_zone_upper"],
                                         "Invalidation": batch_context["invalidation"],
@@ -4332,6 +4342,7 @@ def main() -> None:
                                         context=batch_context,
                                         signals=batch_signals,
                                         backtest=batch_backtest,
+                                        verdict=batch_verdict,
                                     )
 
                             except Exception as exc:
