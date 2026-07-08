@@ -2446,6 +2446,83 @@ def nearest_zone(zones: List[Zone], current_price: float, direction: str = "supp
     return sorted(candidates, key=lambda z: abs(current_price - z.center))[0]
 
 
+# -----------------------------------------------------------------------------
+# Shared per-signal scoring rules
+#
+# These pure functions define the seven "core" bottom conditions. They are the
+# single source of truth called by BOTH the live scoring engine
+# (calculate_bottom_score) and the historical backtest scan
+# (core_bottom_condition_score). Previously the backtest re-implemented the same
+# rules by hand, which silently drifted from the live model over time; sharing
+# the code makes drift impossible. Each returns (points, max_points, explanation).
+# -----------------------------------------------------------------------------
+
+CORE_CONDITION_MAX = 95  # 20 + 15 + 15 + 10 + 15 + 10 + 10
+
+
+def score_support_proximity(close: float, support_level: Optional[float], atr: float,
+                            source: str = "support") -> Tuple[float, float, str]:
+    if support_level is None or not (support_level > 0):
+        return 0.0, 20.0, f"No reliable {source} level found."
+    distance = abs(close - support_level)
+    if distance <= atr:
+        return 20.0, 20.0, f"Price is within 1 ATR of {source} near {support_level:.2f}."
+    if distance <= 2 * atr:
+        return 12.0, 20.0, f"Price is within 2 ATR of {source} near {support_level:.2f}."
+    return 0.0, 20.0, f"Nearest {source} is around {support_level:.2f}, but price is not close enough."
+
+
+def score_rsi_recovery(rsi: float, prev_rsi: float) -> Tuple[float, float, str]:
+    if rsi < 35 and rsi > prev_rsi:
+        return 15.0, 15.0, f"RSI is oversold and rising ({rsi:.1f})."
+    if rsi < 40 and rsi > prev_rsi:
+        return 10.0, 15.0, f"RSI is below 40 and improving ({rsi:.1f})."
+    return 0.0, 15.0, f"RSI is not giving a strong oversold-recovery signal ({rsi:.1f})."
+
+
+def score_macd_improvement(hist: float, prev_hist: float, hist_3ago: float) -> Tuple[float, float, str]:
+    if hist > prev_hist and (hist - hist_3ago) > 0:
+        return 15.0, 15.0, "MACD histogram is improving over both 1-day and 3-day windows."
+    if hist > prev_hist:
+        return 9.0, 15.0, "MACD histogram improved versus the prior candle."
+    return 0.0, 15.0, "MACD histogram is not yet improving."
+
+
+def score_bollinger_reclaim(close: float, bb_lower: float, prev_close: float,
+                            prev_bb_lower: float, rsi: float) -> Tuple[float, float, str]:
+    if close > bb_lower and prev_close < prev_bb_lower:
+        return 10.0, 10.0, "Price reclaimed the lower Bollinger Band after closing below it."
+    if close > bb_lower and rsi < 45:
+        return 5.0, 10.0, "Price is holding above the lower Bollinger Band while momentum remains depressed."
+    return 0.0, 10.0, "No Bollinger Band reclaim signal."
+
+
+def score_volume_confirmation(volume_ratio: float, close: float, open_: float) -> Tuple[float, float, str]:
+    if volume_ratio >= 1.8 and close >= open_:
+        return 15.0, 15.0, f"High-volume bullish candle; volume is {volume_ratio:.1f}x the 20-day average."
+    if volume_ratio >= 1.5:
+        return 10.0, 15.0, f"Volume spike detected; volume is {volume_ratio:.1f}x the 20-day average."
+    return 0.0, 15.0, f"No major volume spike; volume is {volume_ratio:.1f}x the 20-day average."
+
+
+def score_ma_reclaim(close: float, sma20: float, prev_close: float, prev_sma20: float) -> Tuple[float, float, str]:
+    if close > sma20 and prev_close <= prev_sma20:
+        return 10.0, 10.0, "Price reclaimed the 20-day moving average."
+    if close > sma20:
+        return 2.0, 10.0, "Price is above the 20-day moving average (already, not a fresh reclaim)."
+    return 0.0, 10.0, "Price has not reclaimed the 20-day moving average."
+
+
+def score_deep_correction(drawdown_52w: float, close: float, low_52w: float) -> Tuple[float, float, str]:
+    near_low = close <= low_52w * 1.12
+    deeply_corrected = drawdown_52w <= -0.25
+    if deeply_corrected and near_low:
+        return 10.0, 10.0, f"Stock is deeply corrected ({drawdown_52w:.1%}) and near its 52-week low zone."
+    if deeply_corrected:
+        return 5.0, 10.0, f"Stock is deeply corrected from its 52-week high ({drawdown_52w:.1%})."
+    return 0.0, 10.0, f"Stock is not in a deep correction versus its 52-week high ({drawdown_52w:.1%})."
+
+
 def calculate_bottom_score(
     df: pd.DataFrame,
     sector_df: Optional[pd.DataFrame] = None,
@@ -2511,127 +2588,50 @@ def calculate_bottom_score(
 
     signals: List[SignalResult] = []
 
-    # 1. Price near clustered support
-    support_points = 0.0
-    if support_zone:
-        distance_to_support = abs(current_price - support_zone.center)
-        if distance_to_support <= atr:
-            support_points = 20
-            passed = True
-            explanation = (
-                f"Price is within 1 ATR of clustered support near {support_zone.center:.2f}."
-            )
-        elif distance_to_support <= 2 * atr:
-            support_points = 12
-            passed = True
-            explanation = (
-                f"Price is within 2 ATR of clustered support near {support_zone.center:.2f}."
-            )
-        else:
-            passed = False
-            explanation = (
-                f"Nearest clustered support is around {support_zone.center:.2f}, but price is not close enough."
-            )
-    else:
-        passed = False
-        explanation = "No reliable clustered support zone found."
+    # Signals 1-7 are the "core" bottom conditions, scored through the shared
+    # rules in the section above so the live model and the historical backtest
+    # can never diverge. Each returns (points, max_points, explanation).
 
-    signals.append(SignalResult("Clustered support proximity", support_points, 20, passed, explanation))
+    # 1. Price near clustered support
+    pts, mx, expl = score_support_proximity(
+        current_price, support_zone.center if support_zone else None, atr, source="clustered support"
+    )
+    signals.append(SignalResult("Clustered support proximity", pts, mx, pts > 0, expl))
 
     # 2. RSI oversold and recovering
-    rsi_points = 0.0
-    if latest["RSI14"] < 35 and latest["RSI14"] > prev["RSI14"]:
-        rsi_points = 15
-        passed = True
-        explanation = f"RSI is oversold and rising ({latest['RSI14']:.1f})."
-    elif latest["RSI14"] < 40 and latest["RSI14"] > prev["RSI14"]:
-        rsi_points = 10
-        passed = True
-        explanation = f"RSI is below 40 and improving ({latest['RSI14']:.1f})."
-    else:
-        passed = False
-        explanation = f"RSI is not giving a strong oversold-recovery signal ({latest['RSI14']:.1f})."
-    signals.append(SignalResult("RSI recovery", rsi_points, 15, passed, explanation))
+    pts, mx, expl = score_rsi_recovery(float(latest["RSI14"]), float(prev["RSI14"]))
+    signals.append(SignalResult("RSI recovery", pts, mx, pts > 0, expl))
 
     # 3. MACD momentum improvement
-    macd_points = 0.0
-    macd_hist_slope_3 = latest["MACD_Hist"] - x["MACD_Hist"].iloc[-4]
-    if latest["MACD_Hist"] > prev["MACD_Hist"] and macd_hist_slope_3 > 0:
-        macd_points = 15
-        passed = True
-        explanation = "MACD histogram is improving over both 1-day and 3-day windows."
-    elif latest["MACD_Hist"] > prev["MACD_Hist"]:
-        macd_points = 9
-        passed = True
-        explanation = "MACD histogram improved versus the prior candle."
-    else:
-        passed = False
-        explanation = "MACD histogram is not yet improving."
-    signals.append(SignalResult("MACD momentum improvement", macd_points, 15, passed, explanation))
+    pts, mx, expl = score_macd_improvement(
+        float(latest["MACD_Hist"]), float(prev["MACD_Hist"]), float(x["MACD_Hist"].iloc[-4])
+    )
+    signals.append(SignalResult("MACD momentum improvement", pts, mx, pts > 0, expl))
 
     # 4. Bollinger Band reclaim / mean reversion
-    bb_points = 0.0
-    if latest["Close"] > latest["BB_Lower"] and prev["Close"] < prev["BB_Lower"]:
-        bb_points = 10
-        passed = True
-        explanation = "Price reclaimed the lower Bollinger Band after closing below it."
-    elif latest["Close"] > latest["BB_Lower"] and latest["RSI14"] < 45:
-        bb_points = 5
-        passed = True
-        explanation = "Price is holding above the lower Bollinger Band while momentum remains depressed."
-    else:
-        passed = False
-        explanation = "No Bollinger Band reclaim signal."
-    signals.append(SignalResult("Bollinger Band reclaim", bb_points, 10, passed, explanation))
+    pts, mx, expl = score_bollinger_reclaim(
+        float(latest["Close"]), float(latest["BB_Lower"]),
+        float(prev["Close"]), float(prev["BB_Lower"]), float(latest["RSI14"])
+    )
+    signals.append(SignalResult("Bollinger Band reclaim", pts, mx, pts > 0, expl))
 
     # 5. Volume capitulation / accumulation
-    volume_points = 0.0
-    if latest["Volume_Ratio"] >= 1.8 and latest["Close"] >= latest["Open"]:
-        volume_points = 15
-        passed = True
-        explanation = f"High-volume bullish candle; volume is {latest['Volume_Ratio']:.1f}x the 20-day average."
-    elif latest["Volume_Ratio"] >= 1.5:
-        volume_points = 10
-        passed = True
-        explanation = f"Volume spike detected; volume is {latest['Volume_Ratio']:.1f}x the 20-day average."
-    else:
-        passed = False
-        explanation = f"No major volume spike; volume is {latest['Volume_Ratio']:.1f}x the 20-day average."
-    signals.append(SignalResult("Volume confirmation", volume_points, 15, passed, explanation))
+    pts, mx, expl = score_volume_confirmation(
+        float(latest["Volume_Ratio"]), float(latest["Close"]), float(latest["Open"])
+    )
+    signals.append(SignalResult("Volume confirmation", pts, mx, pts > 0, expl))
 
     # 6. Price reclaiming short-term moving average
-    ma_points = 0.0
-    if latest["Close"] > latest["SMA20"] and prev["Close"] <= prev["SMA20"]:
-        ma_points = 10
-        passed = True
-        explanation = "Price reclaimed the 20-day moving average."
-    elif latest["Close"] > latest["SMA20"]:
-        # A fresh reclaim (above) is the bottom event; simply sitting above the
-        # 20-DMA is trend health and fires in every uptrend, so give it little.
-        ma_points = 2
-        passed = True
-        explanation = "Price is above the 20-day moving average (already, not a fresh reclaim)."
-    else:
-        passed = False
-        explanation = "Price has not reclaimed the 20-day moving average."
-    signals.append(SignalResult("20-DMA reclaim", ma_points, 10, passed, explanation))
+    pts, mx, expl = score_ma_reclaim(
+        float(latest["Close"]), float(latest["SMA20"]), float(prev["Close"]), float(prev["SMA20"])
+    )
+    signals.append(SignalResult("20-DMA reclaim", pts, mx, pts > 0, expl))
 
     # 7. Deep correction / near 52-week low context
-    dd_points = 0.0
-    near_52w_low = current_price <= float(latest["Rolling_52W_Low"]) * 1.12
-    deeply_corrected = float(latest["Drawdown_52W"]) <= -0.25
-    if deeply_corrected and near_52w_low:
-        dd_points = 10
-        passed = True
-        explanation = f"Stock is deeply corrected ({latest['Drawdown_52W']:.1%}) and near its 52-week low zone."
-    elif deeply_corrected:
-        dd_points = 5
-        passed = True
-        explanation = f"Stock is deeply corrected from its 52-week high ({latest['Drawdown_52W']:.1%})."
-    else:
-        passed = False
-        explanation = f"Stock is not in a deep correction versus its 52-week high ({latest['Drawdown_52W']:.1%})."
-    signals.append(SignalResult("Deep correction context", dd_points, 10, passed, explanation))
+    pts, mx, expl = score_deep_correction(
+        float(latest["Drawdown_52W"]), current_price, float(latest["Rolling_52W_Low"])
+    )
+    signals.append(SignalResult("Deep correction context", pts, mx, pts > 0, expl))
 
     # 8. RSI bullish divergence (excluded when not enough swing lows to evaluate)
     div_max = 0 if divergence is None else 10
@@ -2813,70 +2813,49 @@ def max_drawdown_during_period(prices: pd.Series) -> float:
     return float(drawdown.min())
 
 
-def historical_signal_proxy_score(df: pd.DataFrame, i: int) -> float:
-    """Lightweight proxy of bottom score for historical backtesting.
+def core_bottom_condition_score(df: pd.DataFrame, i: int) -> float:
+    """Score the seven core bottom conditions at bar i, normalized to 0-100.
 
-    This avoids calling the full clustering engine thousands of times.
-    It uses the same spirit as the live model: support proximity, RSI recovery,
-    MACD improvement, Bollinger reclaim, volume, and drawdown context.
+    Uses the SAME shared rule functions as the live model (score_rsi_recovery,
+    score_macd_improvement, ...), so the historical scan can never drift from
+    the live scoring logic. The one deliberate approximation is support
+    proximity: the live model uses DBSCAN-clustered support (far too slow to
+    recompute on every historical bar), so here we substitute the rolling
+    20-day low as a cheap stand-in for the nearest support level.
+
+    This is a faithful subset, not the full model: the ~17 slower confirmation
+    signals (anchored VWAPs, regression channel, weekly/monthly momentum, stage
+    analysis, volume profile, market structure, ...) are not evaluated per bar.
     """
     if i < 260:
         return np.nan
 
     row = df.iloc[i]
     prev = df.iloc[i - 1]
-    window = df.iloc[i - 252:i + 1]
 
-    close = row["Close"]
-    atr = row["ATR14"]
+    close = float(row["Close"])
+    atr = float(row["ATR14"])
     if pd.isna(atr) or atr <= 0:
         atr = close * 0.02
 
-    score = 0.0
+    recent_low = float(df["Low"].iloc[i - 19:i + 1].min())
+    hist_3ago = float(df["MACD_Hist"].iloc[i - 3])
 
-    recent_low = window["Low"].rolling(20).min().iloc[-1]
-    support_distance = abs(close - recent_low)
-    if support_distance <= atr:
-        score += 20
-    elif support_distance <= 2 * atr:
-        score += 12
+    points = 0.0
+    points += score_support_proximity(close, recent_low, atr)[0]
+    points += score_rsi_recovery(float(row["RSI14"]), float(prev["RSI14"]))[0]
+    points += score_macd_improvement(float(row["MACD_Hist"]), float(prev["MACD_Hist"]), hist_3ago)[0]
+    points += score_bollinger_reclaim(close, float(row["BB_Lower"]), float(prev["Close"]), float(prev["BB_Lower"]), float(row["RSI14"]))[0]
+    points += score_volume_confirmation(float(row["Volume_Ratio"]), close, float(row["Open"]))[0]
+    points += score_ma_reclaim(close, float(row["SMA20"]), float(prev["Close"]), float(prev["SMA20"]))[0]
+    points += score_deep_correction(float(row["Drawdown_52W"]), close, float(row["Rolling_52W_Low"]))[0]
 
-    if row["RSI14"] < 35 and row["RSI14"] > prev["RSI14"]:
-        score += 15
-    elif row["RSI14"] < 40 and row["RSI14"] > prev["RSI14"]:
-        score += 10
-
-    if row["MACD_Hist"] > prev["MACD_Hist"]:
-        score += 15
-
-    if row["Close"] > row["BB_Lower"] and prev["Close"] < prev["BB_Lower"]:
-        score += 10
-    elif row["Close"] > row["BB_Lower"] and row["RSI14"] < 45:
-        score += 5
-
-    if row["Volume_Ratio"] >= 1.8 and row["Close"] >= row["Open"]:
-        score += 15
-    elif row["Volume_Ratio"] >= 1.5:
-        score += 10
-
-    if row["Close"] > row["SMA20"] and prev["Close"] <= prev["SMA20"]:
-        score += 10
-    elif row["Close"] > row["SMA20"]:
-        score += 6
-
-    deeply_corrected = row["Drawdown_52W"] <= -0.25
-    near_low = close <= row["Rolling_52W_Low"] * 1.12
-    if deeply_corrected and near_low:
-        score += 10
-    elif deeply_corrected:
-        score += 5
-
-    return min(score, 100)
+    return points / CORE_CONDITION_MAX * 100
 
 
 def run_backtest(
     df: pd.DataFrame,
-    signal_threshold: float = 60,
+    signal_threshold: float = 45,
     forward_days: int = 63,
     success_return: float = 0.05,
 ) -> Tuple[BacktestResult, pd.DataFrame]:
@@ -2884,7 +2863,8 @@ def run_backtest(
 
     Args:
         df: Daily dataframe with indicators.
-        signal_threshold: Proxy score needed to trigger a historical signal.
+        signal_threshold: Core bottom-condition score (0-100) needed to trigger
+            a historical signal, using the same shared rules as the live model.
         forward_days: Forward holding period, e.g. 21 = 1 month, 63 = 3 months.
         success_return: Return threshold counted as a successful bottom.
     """
@@ -2912,7 +2892,7 @@ def run_backtest(
         if i - last_signal_i < cooldown:
             continue
 
-        proxy_score = historical_signal_proxy_score(x, i)
+        proxy_score = core_bottom_condition_score(x, i)
         if pd.isna(proxy_score) or proxy_score < signal_threshold:
             continue
 
@@ -2937,7 +2917,7 @@ def run_backtest(
                 "Date": x.index[i],
                 "Entry": entry_price,
                 "Exit": exit_price,
-                "Proxy_Score": proxy_score,
+                "Core_Score": proxy_score,
                 "Forward_Return": fwd_return,
                 "Max_Drawdown": mdd,
                 "Success": success,
@@ -3099,7 +3079,7 @@ def generate_explanation(
 
     if backtest.sample_size > 0:
         text.append(
-            f"Historically, similar proxy signals occurred **{backtest.sample_size}** times in the tested period. "
+            f"Historically, similar core bottom-condition signals occurred **{backtest.sample_size}** times in the tested period. "
             f"The hit rate was **{backtest.hit_rate:.1%}**, versus a random-entry baseline of "
             f"**{backtest.baseline_hit_rate:.1%}** over the same horizon — the confidence adjustment rewards only "
             f"the excess over that baseline. The average forward return was **{backtest.avg_forward_return:.1%}** "
@@ -3310,7 +3290,7 @@ def render_final_verdict_card(
             </div>
             <div style="margin-top:18px;line-height:1.55;color:#cbd5e1;">
                 Base technical score: <b>{base_score:.1f}/100</b> · Backtest adjustment:
-                <b>{backtest.confidence_adjustment:+.0f}</b> · Historical proxy signals: <b>{backtest.sample_size}</b> ·
+                <b>{backtest.confidence_adjustment:+.0f}</b> · Historical core-condition signals: <b>{backtest.sample_size}</b> ·
                 Hit rate: <b>{backtest.hit_rate:.1%}</b> vs random-entry baseline <b>{backtest.baseline_hit_rate:.1%}</b> ·
                 Average forward return: <b>{backtest.avg_forward_return:.1%}</b>
             </div>
@@ -3499,12 +3479,12 @@ def render_calculation_breakdown(
         Final confidence is clipped between 0 and 100
         ```
 
-        The backtest adjustment is based on how similar historical proxy signals performed.
+        The backtest adjustment is based on how similar historical core-condition signals performed.
         """
     )
 
     backtest_rows = [
-        {"Metric": "Historical proxy signals", "Value": f"{backtest.sample_size}"},
+        {"Metric": "Historical core-condition signals", "Value": f"{backtest.sample_size}"},
         {"Metric": "Hit rate", "Value": f"{backtest.hit_rate:.1%}"},
         {"Metric": "Random-entry baseline hit rate", "Value": f"{backtest.baseline_hit_rate:.1%}"},
         {"Metric": "Excess hit rate over baseline", "Value": f"{backtest.hit_rate - backtest.baseline_hit_rate:+.1%}"},
@@ -4038,7 +4018,12 @@ def main() -> None:
         )
 
         st.header("Backtest settings")
-        signal_threshold = st.slider("Historical signal threshold", 40, 85, 60, step=5)
+        signal_threshold = st.slider(
+            "Historical signal threshold", 25, 65, 45, step=5,
+            help="Core bottom-condition score (0-100, same 7 shared rules as the live model) a "
+                 "historical bar must reach to count as a signal. The score rarely exceeds ~65, "
+                 "so 45 is a demanding-but-populated default.",
+        )
         forward_days = st.selectbox("Forward return window", [21, 42, 63, 126], index=2, format_func=lambda x: f"{x} trading days")
         success_return = st.slider("Success return threshold", 0.00, 0.25, 0.05, step=0.01, format="%.2f")
 
@@ -4263,7 +4248,7 @@ def main() -> None:
             with st.expander("Open historical signal trades", expanded=False):
                 st.dataframe(display_trades, use_container_width=True, hide_index=True)
         else:
-            st.warning("No historical proxy signals found with the selected threshold. Lower the threshold or use a longer history.")
+            st.warning("No historical core-condition signals found with the selected threshold. Lower the threshold or use a longer history.")
 
         with st.expander("Index testing and stored signal database", expanded=False):
             st.subheader("Index-level testing")
@@ -4404,8 +4389,14 @@ def main() -> None:
 
                 **Important implementation note**
 
-                The live score uses the full engine. The backtest uses a lighter proxy score so the app remains fast.
-                For production, you should vectorize or batch the full signal engine and run a more rigorous walk-forward test.
+                The live score evaluates all ~24 signals. The historical backtest scans the seven
+                *core* bottom conditions (support proximity, RSI recovery, MACD, Bollinger reclaim,
+                volume, 20-DMA reclaim, deep-correction) scored through the **same shared rule
+                functions** as the live model — so the backtest can never drift from the live logic.
+                The ~17 slower confirmation signals (anchored VWAPs, regression channel, weekly/monthly
+                momentum, stage analysis, volume profile, market structure) are too expensive to
+                recompute on every historical bar (~1.3s each), so they are not part of the historical
+                scan; a fuller walk-forward test would require vectorizing those signals.
                 """
             )
 
