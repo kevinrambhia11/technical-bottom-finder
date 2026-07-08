@@ -2755,18 +2755,18 @@ def calculate_bottom_score(
     # 25. Major-low anchored VWAP
     signals.append(major_low_avwap_signal)
 
+    # Production filters are tradeability / market-context screens, NOT bottom
+    # evidence. They are kept OUT of the scored signal list so the 0-100 bottom
+    # score (and therefore the verdict cutoffs) are identical whether or not the
+    # user enables them. They are surfaced separately as pass/fail screens.
+    production_screens: List[SignalResult] = []
     if include_production_filters:
-        # 23. Liquidity filter
-        signals.append(liquidity_signal)
-
-        # 24. Slippage filter
-        signals.append(slippage_signal)
-
-        # 25. Sector-relative strength
-        signals.append(sector_rs_signal)
-
-        # 26. Market-regime filter
-        signals.append(market_regime_signal_result)
+        production_screens = [
+            liquidity_signal,
+            slippage_signal,
+            sector_rs_signal,
+            market_regime_signal_result,
+        ]
 
     raw_score = sum(s.points for s in signals)
     max_score = sum(s.max_points for s in signals)
@@ -2800,6 +2800,7 @@ def calculate_bottom_score(
         "liquidity_details": liquidity_details,
         "slippage_details": slippage_details,
         "market_regime_details": market_regime_details,
+        "production_screens": production_screens,
         "raw_score": raw_score,
         "max_score": max_score,
     }
@@ -3977,6 +3978,56 @@ def run_full_analysis(
 # Main Streamlit app
 # -----------------------------------------------------------------------------
 
+MAIN_CHART_OVERLAY_OPTIONS = [
+    "Estimated bottom zone",
+    "Invalidation level",
+    "Clustered support",
+    "Volume-profile support",
+    "Nearest resistance",
+    "SMA20",
+    "SMA50",
+    "SMA200",
+    "Yearly anchored VWAP",
+    "AVWAP from 52W low",
+    "AVWAP from 2Y low",
+    "2Y regression midline",
+    "2Y regression upper band",
+    "2Y regression lower band",
+    "Bollinger upper band",
+    "Bollinger lower band",
+]
+MAIN_CHART_OVERLAY_DEFAULT = [
+    "Estimated bottom zone", "Invalidation level", "Clustered support",
+    "Volume-profile support", "SMA20", "SMA50",
+]
+
+
+def render_production_screens(screens: List[SignalResult]) -> None:
+    """Render production/tradeability screens as a separate pass/fail panel.
+
+    These do NOT contribute to the bottom score; they gauge whether the setup is
+    tradeable (liquidity, slippage) and whether the market backdrop is supportive
+    (sector-relative strength, market regime).
+    """
+    if not screens:
+        return
+    st.markdown("## Tradeability & market-context screens")
+    st.caption(
+        "These are separate from the bottom score — they do not change the 0-100 number or the "
+        "verdict. They tell you whether a flagged bottom is actually tradeable and whether the "
+        "broader market backdrop supports acting on it."
+    )
+    rows = []
+    for s in screens:
+        if not s.max_points:
+            result = "Not evaluated"
+        else:
+            ratio = s.points / s.max_points
+            result = "Pass" if ratio >= 0.7 else ("Partial" if ratio > 0 else "Fail")
+        rows.append({"Screen": s.name, "Result": result, "Detail": s.explanation})
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
 def main() -> None:
     st.markdown(APP_CSS, unsafe_allow_html=True)
     st.markdown(
@@ -3997,32 +4048,7 @@ def main() -> None:
         st.header("Inputs")
         ticker = st.text_input("Ticker", value="AAPL", help="Use .NS for NSE stocks, e.g. RELIANCE.NS")
         period = st.selectbox("History", ["2y", "5y", "10y", "max"], index=1)
-        chart_lookback = st.slider("Chart lookback days", 120, 1000, 365, step=30)
-
-        st.header("Main chart display")
-        main_chart_overlays = st.multiselect(
-            "Choose overlays for the main price chart",
-            options=[
-                "Estimated bottom zone",
-                "Invalidation level",
-                "Clustered support",
-                "Volume-profile support",
-                "Nearest resistance",
-                "SMA20",
-                "SMA50",
-                "SMA200",
-                "Yearly anchored VWAP",
-                "AVWAP from 52W low",
-                "AVWAP from 2Y low",
-                "2Y regression midline",
-                "2Y regression upper band",
-                "2Y regression lower band",
-                "Bollinger upper band",
-                "Bollinger lower band",
-            ],
-            default=["Estimated bottom zone", "Invalidation level", "Clustered support", "Volume-profile support", "SMA20", "SMA50"],
-            help="Keep fewer overlays selected for a cleaner chart. Add more when you want to inspect a specific indicator.",
-        )
+        st.caption("Chart display options (overlays, zoom) live next to each chart — they only affect the view, not the score.")
 
         st.header("Backtest settings")
         signal_threshold = st.slider(
@@ -4038,7 +4064,7 @@ def main() -> None:
         show_advanced_tools = st.checkbox(
             "Show production filters / batch testing",
             value=False,
-            help="Keep this off for normal single-stock technical bottom analysis. Turn it on only for liquidity, slippage, market-regime, sector-relative strength, database storage, or index batch testing."
+            help="Adds liquidity, slippage, sector-relative strength and market-regime screens (shown as a separate pass/fail panel — they do NOT change the bottom score), plus database storage and index batch testing."
         )
 
         sector_ticker = ""
@@ -4176,6 +4202,15 @@ def main() -> None:
             setup_summary=setup_summary,
         )
 
+        with st.expander("Chart display options", expanded=False):
+            main_chart_overlays = st.multiselect(
+                "Overlays for the main price chart",
+                options=MAIN_CHART_OVERLAY_OPTIONS,
+                default=MAIN_CHART_OVERLAY_DEFAULT,
+                help="Display-only — these change the chart, not the score.",
+            )
+            chart_lookback = st.slider("Chart zoom (days shown)", 120, 1000, 365, step=30, key="main_chart_lookback")
+
         st.plotly_chart(
             plot_price_chart(
                 df.tail(chart_lookback),
@@ -4200,6 +4235,8 @@ def main() -> None:
 
         st.markdown("## What each technical indicator is saying")
         render_indicator_cards(signals)
+
+        render_production_screens(context.get("production_screens", []))
 
         st.markdown("## Detected support / resistance zones")
         zone_rows = []
@@ -4448,8 +4485,9 @@ def main() -> None:
                 "ATR compression",
             ],
         )
+        charts_lookback = st.slider("Chart zoom (days shown)", 120, 1000, 365, step=30, key="charts_tab_lookback")
 
-        plot_indicator_chart_grid(df, chart_lookback, selected_indicator_charts)
+        plot_indicator_chart_grid(df, charts_lookback, selected_indicator_charts)
 
     with calculations_tab:
         render_calculation_breakdown(
