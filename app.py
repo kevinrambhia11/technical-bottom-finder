@@ -1,5 +1,5 @@
 """
-AI Technical Bottom Finder - Serious Version
+Technical Bottom Finder - Serious Version
 
 Features included:
 1. Support/resistance clustering
@@ -9,7 +9,7 @@ Features included:
 5. Multiple-timeframe confirmation
 6. Backtesting module
 7. Confidence score based on historical hit rate
-8. Optional AI-style explanation layer using deterministic text generation
+8. Optional plain-English explanation layer using deterministic text generation
 9. Survivorship-bias-free constituent CSV support for index-level testing
 10. Slippage and liquidity filters
 11. Sector-relative strength
@@ -361,7 +361,7 @@ APP_CSS = """
 # -----------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="AI Technical Bottom Finder",
+    page_title="Technical Bottom Finder",
     page_icon="📉",
     layout="wide",
 )
@@ -3095,7 +3095,7 @@ def generate_explanation(
     context: Dict[str, object],
     setup_type: str = "",
 ) -> str:
-    """Generate a deterministic AI-style explanation.
+    """Generate a deterministic plain-English explanation.
 
     You can replace this with an LLM call later by sending the same structured
     data to your model.
@@ -3114,7 +3114,7 @@ def generate_explanation(
     current_price = context["current_price"]
 
     text = []
-    text.append(f"### AI Technical View for {ticker.upper()}")
+    text.append(f"### Technical View for {ticker.upper()}")
     text.append("")
     headline = reconciled_verdict(final_score, setup_type) if setup_type else verdict_from_score(final_score)
     text.append(
@@ -3872,6 +3872,26 @@ def plot_stage_analysis(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+# One-line, plain-English explanation shown under each indicator chart. Spells
+# out the abbreviations (RSI, MACD, ATR, OBV, VWAP, SMA, HV) and what to look for.
+CHART_EXPLANATIONS = {
+    "Price + key moving averages": "Candlesticks with SMA = Simple Moving Average (average price over 20 / 50 / 200 days). Price above the lines = uptrend; the 200-day is the key long-term line.",
+    "200-week SMA": "The 200-week Simple Moving Average — a major long-term floor many big investors watch. Holding above it is bullish; reclaiming it after a drop often marks a bottom.",
+    "Yearly anchored VWAP": "VWAP = Volume-Weighted Average Price (average price paid, weighted by volume), reset at the start of each year. Above it = buyers this year are in profit.",
+    "2-year linear regression channel": "A best-fit straight trend line through ~2 years of price, with bands at ±2 standard deviations. The lower band often acts as support.",
+    "Daily RSI": "RSI = Relative Strength Index (0–100 momentum gauge). Below 30 = oversold (possible bounce), above 70 = overbought.",
+    "Weekly RSI / divergence context": "Weekly RSI. Bullish divergence = price makes a lower low while RSI makes a higher low — an early sign selling is exhausting.",
+    "Daily MACD": "MACD = Moving Average Convergence Divergence (trend momentum). The MACD line crossing above its signal line is a bullish turn.",
+    "Weekly MACD": "The same MACD momentum read on weekly bars — slower but more reliable than the daily version.",
+    "Coppock Curve": "A long-term momentum gauge on monthly data. Turning up from below zero has historically flagged major market bottoms.",
+    "Fixed range volume profile": "How much volume traded at each price level. Long bars = heavily-traded prices that tend to act as support or resistance.",
+    "Stan Weinstein Stage Analysis": "Weekly price vs its 30-week average. Stage 1 = basing, Stage 2 = advancing, Stage 3 = topping, Stage 4 = declining.",
+    "OBV trend": "OBV = On-Balance Volume (running tally of volume on up days minus down days). Rising OBV suggests quiet accumulation.",
+    "Historical volatility percentile": "Where recent volatility ranks vs the past year (0–100%). Very high = panic/capitulation; falling from a high often precedes a bottom.",
+    "ATR compression": "ATR = Average True Range (typical daily move). ATR shrinking = volatility contracting, which often comes just before a trend change.",
+}
+
+
 def plot_indicator_chart_grid(
     df: pd.DataFrame,
     chart_lookback: int,
@@ -3927,6 +3947,9 @@ def plot_indicator_chart_grid(
             with col:
                 try:
                     st.plotly_chart(chart_builders[chart_name](), use_container_width=True)
+                    explanation = CHART_EXPLANATIONS.get(chart_name)
+                    if explanation:
+                        st.caption(explanation)
                 except Exception as exc:
                     st.warning(f"Could not render {chart_name}: {exc}")
 
@@ -4178,18 +4201,24 @@ def main() -> None:
     with st.sidebar:
         st.header("Inputs")
         ticker = st.text_input("Ticker", value="AAPL", help="Use .NS for NSE stocks, e.g. RELIANCE.NS")
+        st.caption("Stock symbol as listed on Yahoo Finance. Add .NS for Indian NSE stocks (e.g. RELIANCE.NS).")
         period = st.selectbox("History", ["2y", "5y", "10y", "max"], index=1)
+        st.caption("How many years of past prices to load. 5y+ is recommended — long-cycle signals (200-week SMA, Coppock) need enough history.")
         st.caption("Chart display options (overlays, zoom) live next to each chart — they only affect the view, not the score.")
 
         st.header("Backtest settings")
+        st.caption("Backtest = checking whether similar setups in this stock's own past were actually followed by gains.")
         signal_threshold = st.slider(
             "Historical signal threshold", 25, 65, 45, step=5,
             help="Core bottom-condition score (0-100, same 7 shared rules as the live model) a "
                  "historical bar must reach to count as a signal. The score rarely exceeds ~65, "
                  "so 45 is a demanding-but-populated default.",
         )
+        st.caption("Minimum bottom-condition score (0–100) a past day needed to count as a test signal. Higher = stricter, fewer signals.")
         forward_days = st.selectbox("Forward return window", [21, 42, 63, 126], index=2, format_func=lambda x: f"{x} trading days")
+        st.caption("How far ahead the backtest measures the result after a signal. 63 trading days ≈ 3 months.")
         success_return = st.slider("Success return threshold", 0.00, 0.25, 0.05, step=0.01, format="%.2f")
+        st.caption("Gain that counts as a 'successful' bottom. 0.05 = a +5% rise within the window above.")
 
         st.header("Optional advanced tools")
         show_advanced_tools = st.checkbox(
@@ -4197,6 +4226,7 @@ def main() -> None:
             value=False,
             help="Adds liquidity, slippage, sector-relative strength and market-regime screens (shown as a separate pass/fail panel — they do NOT change the bottom score), plus database storage and index batch testing."
         )
+        st.caption("Extra tradeability screens (liquidity, slippage, market regime) plus batch testing. Optional — these do NOT change the bottom score.")
 
         sector_ticker = ""
         market_ticker = ""
@@ -4216,13 +4246,21 @@ def main() -> None:
 
             with st.expander("Advanced production filters", expanded=True):
                 sector_ticker = st.text_input("Sector/industry benchmark ticker", value="", help="Optional. Examples: XLK, XLF, ^CNXIT, ^CNXFINANCE if available from Yahoo Finance.")
+                st.caption("Sector ETF/index (e.g. XLK = US tech). Measures the stock's strength vs its peers. Leave blank to skip.")
                 market_ticker = st.text_input("Market benchmark ticker", value=default_market)
+                st.caption("Broad market index — ^GSPC = S&P 500, ^NSEI = Nifty 50. Used for the market-regime screen.")
                 volatility_ticker = st.text_input("Volatility benchmark ticker", value=default_vol)
+                st.caption("Volatility index — ^VIX (US) or ^INDIAVIX (India). High readings mean a fearful market.")
                 order_value = st.number_input("Assumed order value for slippage", min_value=0.0, value=100000.0, step=25000.0)
+                st.caption("Your intended trade size (in currency). Used to estimate slippage — the price impact of your own order.")
                 min_avg_volume = st.number_input("Minimum 20-day average volume", min_value=0.0, value=100000.0, step=50000.0)
+                st.caption("Liquidity floor: skip stocks trading fewer than this many shares/day (20-day average).")
                 min_avg_traded_value = st.number_input("Minimum 20-day average traded value", min_value=0.0, value=5000000.0, step=1000000.0)
+                st.caption("Liquidity floor in currency: average daily shares × price. Filters out thinly-traded names.")
                 max_atr_pct = st.slider("Maximum ATR% allowed", 0.02, 0.30, 0.12, step=0.01, format="%.2f")
+                st.caption("ATR = Average True Range (typical daily move). Caps how volatile a stock can be and still pass. 0.12 = 12% of price.")
                 save_to_db = st.checkbox("Store signal in local SQLite database", value=False)
+                st.caption("Also save this run to a local database for your own record-keeping (the app already auto-saves each analysis for the zone alert).")
 
             with st.expander("Index testing", expanded=False):
                 constituents_file = st.file_uploader(
@@ -4230,7 +4268,9 @@ def main() -> None:
                     type=["csv"],
                     help="Recommended columns: Ticker, StartDate, EndDate, Sector. EndDate can be blank for active members.",
                 )
+                st.caption("A CSV of index members to batch-analyze at once. Columns: Ticker, StartDate, EndDate, Sector.")
                 max_batch_names = st.slider("Max constituents for batch run", 5, 100, 25, step=5)
+                st.caption("How many members from the CSV to analyze in one batch run.")
 
         run_button = st.button("Analyze", type="primary")
 
