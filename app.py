@@ -554,6 +554,107 @@ def load_signal_history(db_path: Path = DB_PATH, limit: int = 500) -> pd.DataFra
         conn.close()
 
 
+def previous_scan_by_ticker(db_path: Path = DB_PATH) -> Dict[str, Dict[str, float]]:
+    """Return the most recent stored row per ticker BEFORE today.
+
+    Used to compute score deltas and detect newly-entered zones / breaks since
+    the last scan. Keyed by ticker.
+    """
+    if not db_path.exists():
+        return {}
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT ticker, signal_date, latest_close, final_score, verdict,
+                   bottom_zone_lower, bottom_zone_upper, invalidation
+            FROM signals
+            WHERE signal_date < ?
+            ORDER BY signal_date DESC
+            """,
+            (today,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    out: Dict[str, Dict[str, float]] = {}
+    for r in rows:
+        ticker = r[0]
+        if ticker in out:  # first seen is most recent due to DESC ordering
+            continue
+        out[ticker] = {
+            "signal_date": r[1], "latest_close": r[2], "final_score": r[3], "verdict": r[4],
+            "bottom_zone_lower": r[5], "bottom_zone_upper": r[6], "invalidation": r[7],
+        }
+    return out
+
+
+# -----------------------------------------------------------------------------
+# Watchlist storage
+# -----------------------------------------------------------------------------
+
+def init_watchlist_db(db_path: Path = DB_PATH) -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS watchlist (
+                ticker TEXT PRIMARY KEY,
+                added_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_watchlist(db_path: Path = DB_PATH) -> List[str]:
+    if not db_path.exists():
+        return []
+    init_watchlist_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute("SELECT ticker FROM watchlist ORDER BY ticker").fetchall()
+    finally:
+        conn.close()
+    return [r[0] for r in rows]
+
+
+def save_watchlist(tickers: List[str], db_path: Path = DB_PATH) -> None:
+    """Replace the stored watchlist with the given tickers (de-duplicated)."""
+    init_watchlist_db(db_path)
+    seen, clean = set(), []
+    for t in tickers:
+        t = str(t).strip().upper()
+        if t and t not in seen:
+            seen.add(t)
+            clean.append(t)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("DELETE FROM watchlist")
+        conn.executemany("INSERT INTO watchlist (ticker, added_at) VALUES (?, ?)", [(t, now) for t in clean])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def parse_ticker_list(raw: str) -> List[str]:
+    """Parse a comma/newline/space separated ticker string into a clean list."""
+    if not raw:
+        return []
+    seen, out = set(), []
+    for chunk in raw.replace(",", "\n").replace(";", "\n").split("\n"):
+        for tok in chunk.split():
+            t = tok.strip().upper()
+            if t and t not in seen:
+                seen.add(t)
+                out.append(t)
+    return out
+
+
 # -----------------------------------------------------------------------------
 # Data fetching
 # -----------------------------------------------------------------------------
@@ -4002,6 +4103,125 @@ MAIN_CHART_OVERLAY_DEFAULT = [
 ]
 
 
+def zone_status(close: float, lower: float, upper: float, invalidation: float, atr: float) -> Dict[str, object]:
+    """Classify where price sits relative to a stock's bottom zone / invalidation.
+
+    Returns label, emoji, a sort priority (lower = more actionable), and the
+    signed distance to the nearest zone edge in ATRs (0 when inside the zone).
+    """
+    atr = atr if atr and atr > 0 else max(abs(close) * 0.02, 1e-9)
+    if close < invalidation:
+        return {"label": "Broke invalidation", "emoji": "🔴", "priority": 3,
+                "distance_atr": (close - invalidation) / atr}
+    if lower <= close <= upper:
+        return {"label": "In zone", "emoji": "🟢", "priority": 0, "distance_atr": 0.0}
+    if close < lower:  # between invalidation and the zone — dipping into the lower band
+        return {"label": "Below zone", "emoji": "🔵", "priority": 2, "distance_atr": (close - lower) / atr}
+    if close <= upper + atr:
+        return {"label": "Approaching", "emoji": "🟡", "priority": 1, "distance_atr": (close - upper) / atr}
+    return {"label": "Above zone", "emoji": "⚪", "priority": 4, "distance_atr": (close - upper) / atr}
+
+
+def scan_watchlist(
+    tickers: List[str],
+    period: str,
+    signal_threshold: float,
+    forward_days: int,
+    success_return: float,
+    save: bool = True,
+    progress_cb=None,
+) -> pd.DataFrame:
+    """Run the full bottom analysis over a list of tickers and build a ranked,
+    actionable monitoring table with per-ticker status and change-since-last-scan.
+
+    Reuses the cached run_full_analysis engine (no scoring duplication). Production
+    filters are off here so scores are comparable and the scan stays fast; the
+    per-stock screens remain available in single-stock view.
+    """
+    prev = previous_scan_by_ticker()
+    rows: List[Dict[str, object]] = []
+    total = len(tickers)
+
+    for i, ticker in enumerate(tickers):
+        if progress_cb:
+            progress_cb(i, total, ticker)
+        try:
+            res = run_full_analysis(
+                ticker, period, float(signal_threshold), int(forward_days), float(success_return),
+                False, "", "", "", 1e5, 5e6, 0.12, 1e5,
+            )
+        except Exception as exc:  # never let one bad ticker abort the scan
+            rows.append({"Ticker": ticker, "Status": "Error", "Detail": str(exc)[:90]})
+            continue
+
+        err = res.get("error")
+        if err:
+            msg = {"no_data": "No data / bad ticker", "no_volume": "No volume data",
+                   "insufficient_history": "Too little history"}.get(err, str(err))
+            rows.append({"Ticker": ticker, "Status": msg})
+            continue
+
+        ctx = res["context"]
+        close = float(ctx["current_price"])
+        lower = float(ctx["bottom_zone_lower"])
+        upper = float(ctx["bottom_zone_upper"])
+        inval = float(ctx["invalidation"])
+        atr = float(ctx["atr"])
+        final = float(res["final_score"])
+        setup_type, _ = classify_setup_type(res["df"], res["signals"], final)
+        verdict = reconciled_verdict(final, setup_type)
+
+        zs = zone_status(close, lower, upper, inval, atr)
+
+        # Change since the previous scan (a different, earlier day).
+        p = prev.get(ticker.upper())
+        score_delta = (final - float(p["final_score"])) if p and p.get("final_score") is not None else None
+        alert = ""
+        if p and all(p.get(k) is not None for k in ("latest_close", "bottom_zone_lower", "bottom_zone_upper", "invalidation")):
+            prev_zs = zone_status(float(p["latest_close"]), float(p["bottom_zone_lower"]),
+                                  float(p["bottom_zone_upper"]), float(p["invalidation"]), atr)
+            if zs["label"] == "In zone" and prev_zs["label"] != "In zone":
+                alert = "🆕 entered zone"
+            elif zs["label"] == "Broke invalidation" and prev_zs["label"] != "Broke invalidation":
+                alert = "⚠️ broke invalidation"
+
+        if save:
+            try:
+                save_signal_record(
+                    ticker=ticker.upper(), signal_date=res["df"].index[-1], latest_close=close,
+                    base_score=float(res["base_score"]), final_score=final, context=ctx,
+                    signals=res["signals"], backtest=res["backtest"], verdict=verdict,
+                )
+            except Exception:
+                pass  # persistence is best-effort; never break the scan
+
+        rows.append({
+            "Ticker": ticker.upper(),
+            "Status": f"{zs['emoji']} {zs['label']}",
+            "Alert": alert,
+            "Verdict": verdict,
+            "Score": round(final, 1),
+            "Δ vs last": round(score_delta, 1) if score_delta is not None else None,
+            "Price": round(close, 2),
+            "Zone": f"{lower:,.2f} – {upper:,.2f}",
+            "Invalidation": round(inval, 2),
+            "Dist to zone (ATR)": round(float(zs["distance_atr"]), 2),
+            "_priority": int(zs["priority"]),
+        })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    # Rank: actionable statuses first, then higher score. Error/unscored rows sink.
+    if "_priority" in df.columns:
+        df["_priority"] = df["_priority"].fillna(9)
+        sort_score = df["Score"] if "Score" in df.columns else 0
+        df = df.assign(_score=df.get("Score")).sort_values(
+            ["_priority", "_score"], ascending=[True, False], na_position="last"
+        ).drop(columns=["_priority", "_score"], errors="ignore")
+    return df.reset_index(drop=True)
+
+
 def render_production_screens(screens: List[SignalResult]) -> None:
     """Render production/tradeability screens as a separate pass/fail panel.
 
@@ -4028,6 +4248,98 @@ def render_production_screens(screens: List[SignalResult]) -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
+def render_watchlist_view(
+    period: str, signal_threshold: float, forward_days: int, success_return: float, scan_clicked: bool,
+) -> None:
+    """Multi-ticker local-bottom monitor: edit a watchlist, scan it, and get a
+    ranked, actionable table with per-ticker status and change-since-last-scan."""
+    st.markdown("## Watchlist scan")
+    st.caption(
+        "Scan a list of tickers for local-bottom setups. Ranked by how actionable each is — "
+        "in-zone first, then approaching, then dipping below the zone — with invalidation breaks flagged. "
+        "New zone entries and breaks since your last scan are called out as alerts."
+    )
+
+    # Seed the editor: stored watchlist → ?watchlist= URL param → a small default.
+    if "watchlist_text" not in st.session_state:
+        stored = load_watchlist()
+        if not stored:
+            qp = st.query_params.get("watchlist")
+            stored = parse_ticker_list(qp) if qp else []
+        st.session_state["watchlist_text"] = "\n".join(stored) if stored else "AAPL\nMSFT\nNVDA\nRELIANCE.NS"
+
+    st.text_area(
+        "Tickers (comma, space, or newline separated)",
+        key="watchlist_text", height=140,
+        help="Use .NS for NSE stocks, e.g. RELIANCE.NS. Persisted to the local database and the page URL.",
+    )
+    tickers = parse_ticker_list(st.session_state["watchlist_text"])
+
+    col_a, col_b = st.columns([1, 3])
+    with col_a:
+        save_clicked = st.button("💾 Save list")
+    with col_b:
+        st.caption(
+            f"{len(tickers)} tickers · history {period}. First scan is ~4–6s per ticker "
+            "(shorter history = faster); repeat scans within 30 min are cached and instant."
+        )
+    if save_clicked:
+        save_watchlist(tickers)
+        st.query_params["watchlist"] = ",".join(tickers)
+        st.toast(f"Saved {len(tickers)} tickers to your watchlist.")
+
+    if len(tickers) > 50:
+        st.warning(f"{len(tickers)} tickers is a lot — the first scan may take several minutes. Consider trimming.")
+
+    if scan_clicked:
+        if not tickers:
+            st.warning("Add at least one ticker to scan.")
+        else:
+            save_watchlist(tickers)  # persist on every scan
+            st.query_params["watchlist"] = ",".join(tickers)
+            prog = st.progress(0.0, text="Starting scan…")
+
+            def _cb(i: int, total: int, t: str) -> None:
+                prog.progress(min(i / max(total, 1), 1.0), text=f"Scanning {t}  ({i + 1}/{total})…")
+
+            results = scan_watchlist(tickers, period, signal_threshold, forward_days, success_return,
+                                     save=True, progress_cb=_cb)
+            prog.empty()
+            st.session_state["watchlist_results"] = results
+
+    results = st.session_state.get("watchlist_results")
+    if results is None or getattr(results, "empty", True):
+        st.info("Edit your list and click **Scan watchlist** in the sidebar.")
+        return
+
+    def _count(substr: str) -> int:
+        if "Status" not in results.columns:
+            return 0
+        return int(results["Status"].astype(str).str.contains(substr, case=False, na=False).sum())
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("🟢 In zone", _count("In zone"))
+    m2.metric("🟡 Approaching", _count("Approaching"))
+    m3.metric("🔴 Broke invalidation", _count("Broke invalidation"))
+    m4.metric("Scanned", len(results))
+
+    if "Alert" in results.columns:
+        alerts = results[results["Alert"].astype(str).str.len() > 0]
+        if not alerts.empty:
+            st.markdown("### Alerts since last scan")
+            for _, r in alerts.iterrows():
+                st.markdown(f"- **{r['Ticker']}** — {r['Alert']} (now {r['Status']}, price {r.get('Price')})")
+
+    st.markdown("### Ranked results")
+    st.dataframe(results, use_container_width=True, hide_index=True)
+    csv = results.to_csv(index=False).encode("utf-8")
+    st.download_button("Download scan CSV", csv, "watchlist_scan.csv", "text/csv")
+    st.caption(
+        "Status is price vs each stock's bottom zone / invalidation. 'In zone' + a Possible/Strong verdict "
+        "is the prime candidate; use the invalidation level as your risk stop. Educational tool — not investment advice."
+    )
+
+
 def main() -> None:
     st.markdown(APP_CSS, unsafe_allow_html=True)
     st.markdown(
@@ -4045,10 +4357,20 @@ def main() -> None:
     )
 
     with st.sidebar:
+        mode = st.radio(
+            "Mode",
+            ["Single stock", "Watchlist scan"],
+            help="Single stock: full analysis of one ticker. Watchlist scan: monitor a list of "
+                 "tickers for local-bottom setups and get zone-entry / invalidation alerts.",
+        )
+
         st.header("Inputs")
-        ticker = st.text_input("Ticker", value="AAPL", help="Use .NS for NSE stocks, e.g. RELIANCE.NS")
+        ticker = ""
+        if mode == "Single stock":
+            ticker = st.text_input("Ticker", value="AAPL", help="Use .NS for NSE stocks, e.g. RELIANCE.NS")
         period = st.selectbox("History", ["2y", "5y", "10y", "max"], index=1)
-        st.caption("Chart display options (overlays, zoom) live next to each chart — they only affect the view, not the score.")
+        if mode == "Single stock":
+            st.caption("Chart display options (overlays, zoom) live next to each chart — they only affect the view, not the score.")
 
         st.header("Backtest settings")
         signal_threshold = st.slider(
@@ -4060,13 +4382,7 @@ def main() -> None:
         forward_days = st.selectbox("Forward return window", [21, 42, 63, 126], index=2, format_func=lambda x: f"{x} trading days")
         success_return = st.slider("Success return threshold", 0.00, 0.25, 0.05, step=0.01, format="%.2f")
 
-        st.header("Optional advanced tools")
-        show_advanced_tools = st.checkbox(
-            "Show production filters / batch testing",
-            value=False,
-            help="Adds liquidity, slippage, sector-relative strength and market-regime screens (shown as a separate pass/fail panel — they do NOT change the bottom score), plus database storage and index batch testing."
-        )
-
+        show_advanced_tools = False
         sector_ticker = ""
         market_ticker = ""
         volatility_ticker = ""
@@ -4077,31 +4393,47 @@ def main() -> None:
         save_to_db = False
         constituents_file = None
         max_batch_names = 25
+        run_button = False
+        scan_button = False
 
-        if show_advanced_tools:
-            ticker_upper_for_defaults = ticker.strip().upper()
-            default_market = "^NSEI" if ticker_upper_for_defaults.endswith(".NS") else "^GSPC"
-            default_vol = "^INDIAVIX" if ticker_upper_for_defaults.endswith(".NS") else "^VIX"
+        if mode == "Single stock":
+            st.header("Optional advanced tools")
+            show_advanced_tools = st.checkbox(
+                "Show production filters / batch testing",
+                value=False,
+                help="Adds liquidity, slippage, sector-relative strength and market-regime screens (shown as a separate pass/fail panel — they do NOT change the bottom score), plus database storage and index batch testing."
+            )
 
-            with st.expander("Advanced production filters", expanded=True):
-                sector_ticker = st.text_input("Sector/industry benchmark ticker", value="", help="Optional. Examples: XLK, XLF, ^CNXIT, ^CNXFINANCE if available from Yahoo Finance.")
-                market_ticker = st.text_input("Market benchmark ticker", value=default_market)
-                volatility_ticker = st.text_input("Volatility benchmark ticker", value=default_vol)
-                order_value = st.number_input("Assumed order value for slippage", min_value=0.0, value=100000.0, step=25000.0)
-                min_avg_volume = st.number_input("Minimum 20-day average volume", min_value=0.0, value=100000.0, step=50000.0)
-                min_avg_traded_value = st.number_input("Minimum 20-day average traded value", min_value=0.0, value=5000000.0, step=1000000.0)
-                max_atr_pct = st.slider("Maximum ATR% allowed", 0.02, 0.30, 0.12, step=0.01, format="%.2f")
-                save_to_db = st.checkbox("Store signal in local SQLite database", value=False)
+            if show_advanced_tools:
+                ticker_upper_for_defaults = ticker.strip().upper()
+                default_market = "^NSEI" if ticker_upper_for_defaults.endswith(".NS") else "^GSPC"
+                default_vol = "^INDIAVIX" if ticker_upper_for_defaults.endswith(".NS") else "^VIX"
 
-            with st.expander("Index testing", expanded=False):
-                constituents_file = st.file_uploader(
-                    "Upload point-in-time constituents CSV",
-                    type=["csv"],
-                    help="Recommended columns: Ticker, StartDate, EndDate, Sector. EndDate can be blank for active members.",
-                )
-                max_batch_names = st.slider("Max constituents for batch run", 5, 100, 25, step=5)
+                with st.expander("Advanced production filters", expanded=True):
+                    sector_ticker = st.text_input("Sector/industry benchmark ticker", value="", help="Optional. Examples: XLK, XLF, ^CNXIT, ^CNXFINANCE if available from Yahoo Finance.")
+                    market_ticker = st.text_input("Market benchmark ticker", value=default_market)
+                    volatility_ticker = st.text_input("Volatility benchmark ticker", value=default_vol)
+                    order_value = st.number_input("Assumed order value for slippage", min_value=0.0, value=100000.0, step=25000.0)
+                    min_avg_volume = st.number_input("Minimum 20-day average volume", min_value=0.0, value=100000.0, step=50000.0)
+                    min_avg_traded_value = st.number_input("Minimum 20-day average traded value", min_value=0.0, value=5000000.0, step=1000000.0)
+                    max_atr_pct = st.slider("Maximum ATR% allowed", 0.02, 0.30, 0.12, step=0.01, format="%.2f")
+                    save_to_db = st.checkbox("Store signal in local SQLite database", value=False)
 
-        run_button = st.button("Analyze", type="primary")
+                with st.expander("Index testing", expanded=False):
+                    constituents_file = st.file_uploader(
+                        "Upload point-in-time constituents CSV",
+                        type=["csv"],
+                        help="Recommended columns: Ticker, StartDate, EndDate, Sector. EndDate can be blank for active members.",
+                    )
+                    max_batch_names = st.slider("Max constituents for batch run", 5, 100, 25, step=5)
+
+            run_button = st.button("Analyze", type="primary")
+        else:
+            scan_button = st.button("Scan watchlist", type="primary")
+
+    if mode == "Watchlist scan":
+        render_watchlist_view(period, signal_threshold, forward_days, success_return, scan_button)
+        return
 
     if not ticker:
         st.info("Enter a ticker to begin.")
