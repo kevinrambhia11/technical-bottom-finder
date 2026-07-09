@@ -556,43 +556,6 @@ def load_signal_history(db_path: Path = DB_PATH, limit: int = 500) -> pd.DataFra
         conn.close()
 
 
-def previous_scan_by_ticker(db_path: Path = DB_PATH) -> Dict[str, Dict[str, float]]:
-    """Return the most recent stored row per ticker BEFORE today.
-
-    Used to compute score deltas and detect newly-entered zones / breaks since
-    the last scan. Keyed by ticker.
-    """
-    # Ensure the signals table exists before querying (idempotent), so a fresh
-    # filesystem never raises 'no such table: signals'.
-    init_signal_db(db_path)
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    conn = sqlite3.connect(db_path)
-    try:
-        rows = conn.execute(
-            """
-            SELECT ticker, signal_date, latest_close, final_score, verdict,
-                   bottom_zone_lower, bottom_zone_upper, invalidation
-            FROM signals
-            WHERE signal_date < ?
-            ORDER BY signal_date DESC
-            """,
-            (today,),
-        ).fetchall()
-    finally:
-        conn.close()
-
-    out: Dict[str, Dict[str, float]] = {}
-    for r in rows:
-        ticker = r[0]
-        if ticker in out:  # first seen is most recent due to DESC ordering
-            continue
-        out[ticker] = {
-            "signal_date": r[1], "latest_close": r[2], "final_score": r[3], "verdict": r[4],
-            "bottom_zone_lower": r[5], "bottom_zone_upper": r[6], "invalidation": r[7],
-        }
-    return out
-
-
 # -----------------------------------------------------------------------------
 # Data fetching
 # -----------------------------------------------------------------------------
@@ -4081,25 +4044,6 @@ MAIN_CHART_OVERLAY_DEFAULT = [
 ]
 
 
-def zone_status(close: float, lower: float, upper: float, invalidation: float, atr: float) -> Dict[str, object]:
-    """Classify where price sits relative to a stock's bottom zone / invalidation.
-
-    Returns label, emoji, a sort priority (lower = more actionable), and the
-    signed distance to the nearest zone edge in ATRs (0 when inside the zone).
-    """
-    atr = atr if atr and atr > 0 else max(abs(close) * 0.02, 1e-9)
-    if close < invalidation:
-        return {"label": "Broke invalidation", "emoji": "🔴", "priority": 3,
-                "distance_atr": (close - invalidation) / atr}
-    if lower <= close <= upper:
-        return {"label": "In zone", "emoji": "🟢", "priority": 0, "distance_atr": 0.0}
-    if close < lower:  # between invalidation and the zone — dipping into the lower band
-        return {"label": "Below zone", "emoji": "🔵", "priority": 2, "distance_atr": (close - lower) / atr}
-    if close <= upper + atr:
-        return {"label": "Approaching", "emoji": "🟡", "priority": 1, "distance_atr": (close - upper) / atr}
-    return {"label": "Above zone", "emoji": "⚪", "priority": 4, "distance_atr": (close - upper) / atr}
-
-
 def render_production_screens(screens: List[SignalResult]) -> None:
     """Render production/tradeability screens as a separate pass/fail panel.
 
@@ -4126,62 +4070,6 @@ def render_production_screens(screens: List[SignalResult]) -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
-def render_zone_alert(ticker: str, context: Dict[str, object], prev: Optional[Dict[str, float]] = None) -> None:
-    """Prominent alert: where price sits vs this stock's bottom zone / invalidation
-    right now, plus any status change since the last stored analysis of it."""
-    close = float(context["current_price"])
-    lower = float(context["bottom_zone_lower"])
-    upper = float(context["bottom_zone_upper"])
-    inval = float(context["invalidation"])
-    atr = float(context.get("atr") or 0.0)
-    zs = zone_status(close, lower, upper, inval, atr)
-    label = zs["label"]
-    dist = abs(float(zs["distance_atr"]))
-    zone_txt = f"{lower:,.2f} – {upper:,.2f}"
-    tk = ticker.upper()
-
-    st.markdown("## 🔔 Zone alert")
-    if label == "In zone":
-        st.success(
-            f"🟢 **IN THE BOTTOM ZONE** — {tk} at **{close:,.2f}** is inside its estimated support zone "
-            f"({zone_txt}). This is the prime area to act on; set your risk stop below invalidation **{inval:,.2f}**."
-        )
-    elif label == "Approaching":
-        st.warning(
-            f"🟡 **APPROACHING THE ZONE** — {tk} at **{close:,.2f}** is {dist:.1f} ATR above the zone "
-            f"({zone_txt}). Get ready; watch for it to reach {upper:,.2f}."
-        )
-    elif label == "Below zone":
-        st.info(
-            f"🔵 **BELOW THE ZONE (still above invalidation)** — {tk} at **{close:,.2f}** dipped under the zone "
-            f"({zone_txt}) but holds above invalidation **{inval:,.2f}**. Deeper into the potential bottom — watch {inval:,.2f} closely."
-        )
-    elif label == "Broke invalidation":
-        st.error(
-            f"🔴 **BROKE INVALIDATION** — {tk} at **{close:,.2f}** is below the invalidation level **{inval:,.2f}**. "
-            f"The bottom thesis is weakened; avoid new entries / manage risk."
-        )
-    else:  # Above zone
-        st.info(
-            f"⚪ **ABOVE THE ZONE** — {tk} at **{close:,.2f}** is {dist:.1f} ATR above the zone ({zone_txt}); "
-            f"not near a bottom yet. Add it and re-check later."
-        )
-
-    # Change since the last stored analysis of this ticker (a prior day).
-    if prev and all(prev.get(k) is not None for k in ("latest_close", "bottom_zone_lower", "bottom_zone_upper", "invalidation")):
-        prev_zs = zone_status(float(prev["latest_close"]), float(prev["bottom_zone_lower"]),
-                              float(prev["bottom_zone_upper"]), float(prev["invalidation"]), atr)
-        since = prev.get("signal_date", "your last analysis")
-        if label == "In zone" and prev_zs["label"] != "In zone":
-            st.markdown(f"🆕 **Newly entered the bottom zone** since {since} (was *{prev_zs['label']}*).")
-        elif label == "Broke invalidation" and prev_zs["label"] != "Broke invalidation":
-            st.markdown(f"⚠️ **Broke below invalidation** since {since} (was *{prev_zs['label']}*).")
-        elif prev_zs["label"] != label:
-            st.caption(f"Status changed from *{prev_zs['label']}* to *{label}* since {since}.")
-        else:
-            st.caption(f"No status change since {since} (still *{label}*).")
-
-
 def main() -> None:
     st.markdown(APP_CSS, unsafe_allow_html=True)
     st.markdown(
@@ -4201,9 +4089,8 @@ def main() -> None:
     with st.sidebar:
         st.header("Inputs")
         ticker = st.text_input("Ticker", value="AAPL", help="Use .NS for NSE stocks, e.g. RELIANCE.NS")
-        st.caption("Stock symbol as listed on Yahoo Finance. Add .NS for Indian NSE stocks (e.g. RELIANCE.NS).")
         period = st.selectbox("History", ["2y", "5y", "10y", "max"], index=1)
-        st.caption("How many years of past prices to load. 5y+ is recommended — long-cycle signals (200-week SMA, Coppock) need enough history.")
+        st.caption("Years of price history to load (5y+ recommended).")
         st.caption("Chart display options (overlays, zoom) live next to each chart — they only affect the view, not the score.")
 
         st.header("Backtest settings")
@@ -4339,13 +4226,7 @@ def main() -> None:
 
     setup_type, setup_summary = classify_setup_type(df, signals, final_score)
 
-    # Prior stored analysis of this ticker (before today) — powers the zone
-    # alert's "change since last time" line. Captured BEFORE saving today's row.
-    prev_record = previous_scan_by_ticker().get(ticker.strip().upper())
-
-    # Always persist the current analysis so the zone-alert history builds over
-    # time (idempotent per ticker/day). Best-effort — never break the render.
-    try:
+    if save_to_db:
         save_signal_record(
             ticker=ticker.strip().upper(),
             signal_date=df.index[-1],
@@ -4357,8 +4238,6 @@ def main() -> None:
             backtest=backtest,
             verdict=reconciled_verdict(final_score, setup_type),
         )
-    except Exception:
-        pass
 
     latest_close = context["current_price"]
     lower = context["bottom_zone_lower"]
@@ -4380,8 +4259,6 @@ def main() -> None:
             setup_type=setup_type,
             setup_summary=setup_summary,
         )
-
-        render_zone_alert(ticker, context, prev_record)
 
         with st.expander("Chart display options", expanded=False):
             main_chart_overlays = st.multiselect(
