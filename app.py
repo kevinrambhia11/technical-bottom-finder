@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+import time
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -681,10 +682,27 @@ def fetch_ohlcv(
         progress=False,
         group_by="column",
     )
-    if start:
-        df = yf.download(ticker, start=start, **kwargs)
-    else:
-        df = yf.download(ticker, period=period, **kwargs)
+    # Retry with backoff. Yahoo aggressively rate-limits shared IPs (notably
+    # Streamlit Community Cloud), where a burst of requests gets some through and
+    # then 429s the rest. On the final failure we RE-RAISE rather than return
+    # empty, so the failure is NOT cached and the next scan retries this ticker
+    # (successful fetches ARE cached for the TTL).
+    df = None
+    last_exc: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            if start:
+                df = yf.download(ticker, start=start, **kwargs)
+            else:
+                df = yf.download(ticker, period=period, **kwargs)
+            last_exc = None
+            break
+        except Exception as exc:  # transient provider/network/rate-limit error
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(0.8 * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
 
     if df is None or df.empty:
         return pd.DataFrame()
@@ -4154,15 +4172,21 @@ def scan_watchlist(
                 ticker, period, float(signal_threshold), int(forward_days), float(success_return),
                 False, "", "", "", 1e5, 5e6, 0.12, 1e5,
             )
-        except Exception as exc:  # never let one bad ticker abort the scan
-            rows.append({"Ticker": ticker, "Status": "Error", "Detail": str(exc)[:90]})
+        except Exception as exc:  # never let one ticker abort the scan
+            # Almost always a data-provider rate-limit (common on Streamlit
+            # Cloud). Not cached, so a re-scan retries just these.
+            rows.append({
+                "Ticker": ticker, "Status": "⏳ Rate-limited — re-scan",
+                "Detail": f"Data provider error (likely Yahoo rate-limit). Re-scan to retry. [{str(exc)[:60]}]",
+                "_priority": 6,
+            })
             continue
 
         err = res.get("error")
         if err:
             msg = {"no_data": "No data / bad ticker", "no_volume": "No volume data",
                    "insufficient_history": "Too little history"}.get(err, str(err))
-            rows.append({"Ticker": ticker, "Status": msg})
+            rows.append({"Ticker": ticker, "Status": msg, "_priority": 7})
             continue
 
         ctx = res["context"]
@@ -4326,6 +4350,15 @@ def render_watchlist_view(
     m2.metric("🟡 Approaching", _count("Approaching"))
     m3.metric("🔴 Broke invalidation", _count("Broke invalidation"))
     m4.metric("Scanned", len(results))
+
+    rate_limited = _count("Rate-limited")
+    if rate_limited:
+        st.warning(
+            f"⏳ {rate_limited} ticker(s) were rate-limited by the data provider (common on "
+            "Streamlit Cloud, which shares an IP with many apps). Click **Scan watchlist** again "
+            "in a minute — tickers that already succeeded are cached, so only the rate-limited "
+            "ones are retried, and they usually fill in within a scan or two."
+        )
 
     if "Alert" in results.columns:
         alerts = results[results["Alert"].astype(str).str.len() > 0]
