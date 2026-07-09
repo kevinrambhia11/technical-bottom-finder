@@ -526,8 +526,10 @@ def save_signal_record(
 
 def load_signal_history(db_path: Path = DB_PATH, limit: int = 500) -> pd.DataFrame:
     """Load recent stored signals from SQLite."""
-    if not db_path.exists():
-        return pd.DataFrame()
+    # Ensure the signals table exists: on a fresh filesystem (e.g. Streamlit
+    # Cloud) the DB file may already have been created by the watchlist table
+    # only, so a plain existence check is not enough.
+    init_signal_db(db_path)
 
     conn = sqlite3.connect(db_path)
     try:
@@ -560,8 +562,10 @@ def previous_scan_by_ticker(db_path: Path = DB_PATH) -> Dict[str, Dict[str, floa
     Used to compute score deltas and detect newly-entered zones / breaks since
     the last scan. Keyed by ticker.
     """
-    if not db_path.exists():
-        return {}
+    # Ensure the signals table exists before querying it. On a fresh filesystem
+    # the DB file may have been created by init_watchlist_db (watchlist table
+    # only), so 'no such table: signals' would otherwise be raised.
+    init_signal_db(db_path)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     conn = sqlite3.connect(db_path)
     try:
