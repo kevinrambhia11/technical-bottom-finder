@@ -356,6 +356,143 @@ APP_CSS = """
 """
 
 
+# Light-theme overrides. The block above is the dark design (kept intact so dark
+# mode is unchanged); these rules are appended ONLY when the active theme is
+# light, swapping the hardcoded dark backgrounds/text for light equivalents.
+APP_CSS_LIGHT_OVERRIDES = """
+<style>
+    :root {
+        --panel: rgba(255,255,255,0.90);
+        --panel-2: rgba(248,250,252,0.90);
+        --panel-3: rgba(241,245,249,0.70);
+        --border: rgba(180,140,60,0.30);
+        --border-soft: rgba(100,116,139,0.22);
+        --text: #0f172a;
+        --muted: #475569;
+        --muted-2: #64748b;
+        --gold: #b8860b;
+        --gold-soft: rgba(184,134,11,0.12);
+        --green: #16a34a;
+        --green-soft: rgba(22,163,74,0.12);
+        --amber: #d97706;
+        --amber-soft: rgba(217,119,6,0.12);
+        --slate-soft: rgba(100,116,139,0.10);
+        --blue: #2563eb;
+    }
+    .stApp {
+        background:
+            radial-gradient(circle at 20% -10%, rgba(184,134,11,0.10), transparent 30%),
+            radial-gradient(circle at 88% 8%, rgba(59,130,246,0.08), transparent 28%),
+            linear-gradient(180deg, #f7f8fb 0%, #eef1f6 46%, #f7f8fb 100%);
+        color: var(--text);
+    }
+    section[data-testid="stSidebar"] {
+        background:
+            linear-gradient(180deg, rgba(255,255,255,0.98), rgba(244,247,251,0.98)),
+            radial-gradient(circle at top, rgba(184,134,11,0.06), transparent 35%);
+        border-right: 1px solid rgba(180,140,60,0.18);
+        box-shadow: 18px 0 55px rgba(15,23,42,0.06);
+    }
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3,
+    section[data-testid="stSidebar"] .stMarkdown h1,
+    section[data-testid="stSidebar"] .stMarkdown h2,
+    section[data-testid="stSidebar"] .stMarkdown h3 { color: #0f172a; }
+    section[data-testid="stSidebar"] label p { color: #334155; }
+    div[data-testid="stMetric"] {
+        background: linear-gradient(180deg, #ffffff, #f6f8fb);
+        border: 1px solid var(--border);
+        box-shadow: 0 10px 24px rgba(15,23,42,0.06);
+    }
+    .hero-card {
+        background:
+            linear-gradient(135deg, #ffffff, #f4f7fb),
+            radial-gradient(circle at 5% 0%, rgba(184,134,11,0.10), transparent 38%);
+        border: 1px solid rgba(180,140,60,0.28);
+        box-shadow: 0 20px 50px rgba(15,23,42,0.10);
+    }
+    .classification-card { background: rgba(255,255,255,0.75); border: 1px solid var(--border-soft); }
+    .section-card {
+        background: linear-gradient(180deg, #ffffff, #f6f8fb);
+        border: 1px solid var(--border-soft);
+        box-shadow: 0 12px 28px rgba(15,23,42,0.06);
+    }
+    .signal-card {
+        background: linear-gradient(180deg, #ffffff, #f5f8fc);
+        border: 1px solid rgba(100,116,139,0.18);
+        box-shadow: 0 10px 24px rgba(15,23,42,0.06);
+    }
+    .signal-card:hover {
+        border-color: rgba(184,134,11,0.35);
+        background: linear-gradient(180deg, #ffffff, #eef3fa);
+    }
+    .signal-pass { border-top: 1px solid rgba(22,163,74,0.5); box-shadow: inset 0 1px 0 rgba(22,163,74,0.18), 0 10px 24px rgba(15,23,42,0.06); }
+    .signal-fail { border-top: 1px solid rgba(100,116,139,0.30); }
+    .signal-mixed { border-top: 1px solid rgba(217,119,6,0.45); }
+    .explain-box {
+        background: linear-gradient(180deg, #ffffff, #f3f6fb);
+        border: 1px solid rgba(184,134,11,0.20);
+        color: #334155;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
+    }
+    .insight-panel { background: rgba(255,255,255,0.60); border: 1px solid rgba(184,134,11,0.14); }
+    .pill { border: 1px solid rgba(100,116,139,0.25); background: rgba(241,245,249,0.80); color: var(--muted); }
+    .pill-green { color: #15803d; border-color: rgba(22,163,74,0.40); background: var(--green-soft); }
+    .pill-amber { color: #b45309; border-color: rgba(217,119,6,0.40); background: var(--amber-soft); }
+    .pill-slate { color: #475569; border-color: rgba(100,116,139,0.30); background: var(--slate-soft); }
+    .pill-gold { color: #92700f; border-color: rgba(184,134,11,0.40); background: var(--gold-soft); }
+    .stTabs [data-baseweb="tab-list"] { border-bottom: 1px solid rgba(184,134,11,0.20); }
+    .stTabs [data-baseweb="tab"] { color: #64748b; }
+    .stTabs [aria-selected="true"] { color: #92700f !important; }
+    div[data-testid="stDataFrame"] { border: 1px solid rgba(100,116,139,0.18); }
+    div[data-baseweb="input"], div[data-baseweb="select"] > div, div[data-baseweb="popover"] {
+        background-color: #ffffff !important;
+        border-color: rgba(100,116,139,0.30) !important;
+    }
+    div[data-baseweb="tag"] {
+        background: rgba(184,134,11,0.14) !important;
+        border: 1px solid rgba(184,134,11,0.35) !important;
+        color: #92700f !important;
+    }
+    div[data-baseweb="tag"] span { color: #92700f !important; }
+    div[data-testid="stSlider"] [role="slider"] { background: #b8860b !important; border-color: #92700f !important; }
+    div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div { background-color: rgba(184,134,11,0.40) !important; }
+    .stCheckbox [data-testid="stWidgetLabel"] p { color: #334155; }
+</style>
+"""
+
+
+def active_theme() -> str:
+    """Return the viewer's active Streamlit theme ('light' or 'dark').
+
+    Reads st.context.theme (reflects the runtime theme toggle, not just config).
+    Falls back to 'dark' — the app's original design — if unavailable.
+    """
+    try:
+        t = st.context.theme
+        typ = t.get("type") if isinstance(t, dict) else getattr(t, "type", None)
+        if typ in ("light", "dark"):
+            return typ
+    except Exception:
+        pass
+    return "dark"
+
+
+def style_chart(fig: "go.Figure") -> "go.Figure":
+    """Make a Plotly figure blend into whichever app theme is active.
+
+    Transparent backgrounds let the figure inherit the page background (dark or
+    light); the template + font color keep gridlines/text legible in both. Call
+    st.plotly_chart(..., theme=None) so Streamlit does not re-theme over this.
+    """
+    if active_theme() == "light":
+        fig.update_layout(template="plotly_white", font_color="#0f172a")
+    else:
+        fig.update_layout(template="plotly_dark", font_color="#e2e8f0")
+    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    return fig
+
+
 # -----------------------------------------------------------------------------
 # Streamlit page config
 # -----------------------------------------------------------------------------
@@ -3227,7 +3364,7 @@ def render_indicator_cards(signals: List[SignalResult]) -> None:
                         <div class="micro-muted">{status}</div>
                         <div style="font-size:0.98rem;font-weight:760;margin-top:4px;letter-spacing:-0.02em;">{s.name}</div>
                         <div style="margin:8px 0 8px 0;"><span class="pill {pill_class}">{s.points:.1f} / {s.max_points:.0f}</span></div>
-                        <div style="line-height:1.48;color:#d8dee9;font-size:0.92rem;">{s.explanation}</div>
+                        <div style="line-height:1.48;color:var(--text);font-size:0.92rem;">{s.explanation}</div>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -3315,7 +3452,7 @@ def render_final_verdict_card(
                 <div><div class="small-muted">Current price</div><div class="big-level">{latest_close:,.2f}</div></div>
                 <div><div class="small-muted">Final confidence</div><div class="big-level">{final_score:.1f}/100</div></div>
             </div>
-            <div style="margin-top:18px;line-height:1.55;color:#cbd5e1;">
+            <div style="margin-top:18px;line-height:1.55;color:var(--muted);">
                 Base technical score: <b>{base_score:.1f}/100</b> · Backtest adjustment:
                 <b>{backtest.confidence_adjustment:+.0f}</b> · Historical core-condition signals: <b>{backtest.sample_size}</b> ·
                 Hit rate: <b>{backtest.hit_rate:.1%}</b> vs random-entry baseline <b>{backtest.baseline_hit_rate:.1%}</b> ·
@@ -3909,7 +4046,7 @@ def plot_indicator_chart_grid(
             chart_name = chosen[idx]
             with col:
                 try:
-                    st.plotly_chart(chart_builders[chart_name](), use_container_width=True)
+                    st.plotly_chart(style_chart(chart_builders[chart_name]()), theme=None, use_container_width=True)
                     explanation = CHART_EXPLANATIONS.get(chart_name)
                     if explanation:
                         st.caption(explanation)
@@ -4071,7 +4208,10 @@ def render_production_screens(screens: List[SignalResult]) -> None:
 
 
 def main() -> None:
-    st.markdown(APP_CSS, unsafe_allow_html=True)
+    st.markdown(
+        APP_CSS + (APP_CSS_LIGHT_OVERRIDES if active_theme() == "light" else ""),
+        unsafe_allow_html=True,
+    )
     st.markdown(
         """
         <div style="margin: 4px 0 22px 0;">
@@ -4102,8 +4242,19 @@ def main() -> None:
                  "so 45 is a demanding-but-populated default.",
         )
         st.caption("Minimum bottom-condition score (0–100) a past day needed to count as a test signal. Higher = stricter, fewer signals.")
-        forward_days = st.selectbox("Forward return window", [21, 42, 63, 126], index=2, format_func=lambda x: f"{x} trading days")
-        st.caption("How far ahead the backtest measures the result after a signal. 63 trading days ≈ 3 months.")
+        _fwd_labels = {
+            21: "21 trading days (≈1 month)",
+            42: "42 trading days (≈2 months)",
+            63: "63 trading days (≈3 months)",
+            126: "126 trading days (≈6 months)",
+            189: "189 trading days (≈9 months)",
+            252: "252 trading days (≈1 year)",
+        }
+        forward_days = st.selectbox(
+            "Forward return window", [21, 42, 63, 126, 189, 252], index=2,
+            format_func=lambda x: _fwd_labels.get(x, f"{x} trading days"),
+        )
+        st.caption("How far ahead the backtest measures the result after a signal. Longer windows (6mo–1yr) need more history (10y recommended) and produce fewer independent test signals.")
         success_return = st.slider("Success return threshold", 0.00, 0.25, 0.05, step=0.01, format="%.2f")
         st.caption("Gain that counts as a 'successful' bottom. 0.05 = a +5% rise within the window above.")
 
@@ -4267,15 +4418,18 @@ def main() -> None:
                 default=MAIN_CHART_OVERLAY_DEFAULT,
                 help="Display-only — these change the chart, not the score.",
             )
-            chart_lookback = st.slider("Chart zoom (days shown)", 120, 1000, 365, step=30, key="main_chart_lookback")
+            chart_lookback = st.slider("Chart zoom (days shown)", 30, 1000, 365, step=30, key="main_chart_lookback")
 
         st.plotly_chart(
-            plot_price_chart(
-                df.tail(chart_lookback),
-                context,
-                overlays=main_chart_overlays,
-                title="Main price chart — selected overlays only",
+            style_chart(
+                plot_price_chart(
+                    df.tail(chart_lookback),
+                    context,
+                    overlays=main_chart_overlays,
+                    title="Main price chart — selected overlays only",
+                )
             ),
+            theme=None,
             use_container_width=True,
         )
 
@@ -4339,7 +4493,7 @@ def main() -> None:
         c4.metric("Median Forward Return", f"{backtest.median_forward_return:.1%}")
         c5.metric("Confidence Adj.", f"{backtest.confidence_adjustment:+.0f}")
 
-        st.plotly_chart(plot_backtest_trades(trades), use_container_width=True)
+        st.plotly_chart(style_chart(plot_backtest_trades(trades)), theme=None, use_container_width=True)
 
         if not trades.empty:
             display_trades = trades.copy()
@@ -4351,7 +4505,7 @@ def main() -> None:
             with st.expander("Open historical signal trades", expanded=False):
                 st.dataframe(display_trades, use_container_width=True, hide_index=True)
         else:
-            st.warning("No historical core-condition signals found with the selected threshold. Lower the threshold or use a longer history.")
+            st.warning("No historical core-condition signals found. Lower the signal threshold, load more history, or choose a shorter forward-return window (long windows like 6mo–1yr need many years of data to produce test signals).")
 
         with st.expander("Index testing and stored signal database", expanded=False):
             st.subheader("Index-level testing")
@@ -4543,7 +4697,7 @@ def main() -> None:
                 "ATR compression",
             ],
         )
-        charts_lookback = st.slider("Chart zoom (days shown)", 120, 1000, 365, step=30, key="charts_tab_lookback")
+        charts_lookback = st.slider("Chart zoom (days shown)", 30, 1000, 365, step=30, key="charts_tab_lookback")
 
         plot_indicator_chart_grid(df, charts_lookback, selected_indicator_charts)
 
