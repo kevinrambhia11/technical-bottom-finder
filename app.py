@@ -60,437 +60,162 @@ APP_CSS = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
+    /* Theme-agnostic styling. We deliberately do NOT set the page background or
+       text colors — Streamlit's own theme paints those and switches instantly
+       when the viewer toggles light/dark (server-side st.context.theme lags a
+       reload, so we avoid depending on it). We add only neutral translucent
+       panels, gold accents, and structure, all of which read on both themes.
+       Text is inherited everywhere so nothing can become invisible. */
     :root {
-        --bg: #05070d;
-        --bg-2: #090d16;
-        --panel: rgba(12, 18, 30, 0.78);
-        --panel-2: rgba(17, 24, 39, 0.66);
-        --panel-3: rgba(2, 6, 23, 0.52);
-        --border: rgba(197, 164, 92, 0.16);
-        --border-soft: rgba(148, 163, 184, 0.12);
-        --text: #f8fafc;
-        --muted: #9aa7bd;
-        --muted-2: #64748b;
-        --gold: #d6b46a;
-        --gold-soft: rgba(214, 180, 106, 0.14);
-        --green: #4ade80;
-        --green-soft: rgba(74, 222, 128, 0.11);
-        --amber: #fbbf24;
-        --amber-soft: rgba(251, 191, 36, 0.11);
-        --slate-soft: rgba(148, 163, 184, 0.10);
-        --blue: #93c5fd;
+        --gold: #c79a3a;
+        --gold-strong: #b8860b;
+        --gold-soft: rgba(199,154,58,0.14);
+        --border: rgba(199,154,58,0.30);
+        --border-soft: rgba(128,128,128,0.24);
+        --panel: rgba(128,128,128,0.06);
+        --panel-2: rgba(128,128,128,0.11);
     }
 
-    html, body, [class*="css"] {
-        font-family: 'Inter', 'Segoe UI', sans-serif;
-    }
+    html, body, [class*="css"] { font-family: 'Inter', 'Segoe UI', sans-serif; }
 
+    /* Only faint brand tints overlaid on Streamlit's themed background. */
     .stApp {
-        background:
-            radial-gradient(circle at 20% -10%, rgba(214, 180, 106, 0.13), transparent 30%),
-            radial-gradient(circle at 88% 8%, rgba(59, 130, 246, 0.12), transparent 28%),
-            linear-gradient(180deg, #05070d 0%, #080b12 46%, #05070d 100%);
-        color: var(--text);
+        background-image:
+            radial-gradient(circle at 20% -10%, rgba(199,154,58,0.10), transparent 30%),
+            radial-gradient(circle at 88% 8%, rgba(59,130,246,0.07), transparent 28%);
     }
 
-    .block-container {
-        padding-top: 1.25rem;
-        padding-bottom: 3rem;
-        max-width: 1280px;
-    }
+    .block-container { padding-top: 1.25rem; padding-bottom: 3rem; max-width: 1280px; }
+    h1 { font-weight: 800; letter-spacing: -0.055em; font-size: 2.25rem !important; margin-bottom: 0.15rem; }
+    h2, h3 { letter-spacing: -0.04em; font-weight: 760; }
+    h4 { letter-spacing: -0.025em; font-weight: 720; }
+    p, li, label, div { text-rendering: geometricPrecision; }
 
-    h1 {
-        font-weight: 800;
-        letter-spacing: -0.055em;
-        font-size: 2.25rem !important;
-        margin-bottom: 0.15rem;
-    }
-
-    h2, h3 {
-        letter-spacing: -0.04em;
-        font-weight: 760;
-    }
-
-    h4 {
-        letter-spacing: -0.025em;
-        font-weight: 720;
-    }
-
-    p, li, label, div {
-        text-rendering: geometricPrecision;
-    }
-
-    section[data-testid="stSidebar"] {
-        background:
-            linear-gradient(180deg, rgba(7, 10, 20, 0.98), rgba(2, 6, 23, 0.98)),
-            radial-gradient(circle at top, rgba(214, 180, 106, 0.09), transparent 35%);
-        border-right: 1px solid rgba(214, 180, 106, 0.12);
-        box-shadow: 18px 0 55px rgba(0, 0, 0, 0.25);
-    }
-
+    section[data-testid="stSidebar"] { border-right: 1px solid var(--border); }
     section[data-testid="stSidebar"] h2,
     section[data-testid="stSidebar"] h3,
     section[data-testid="stSidebar"] .stMarkdown h1,
     section[data-testid="stSidebar"] .stMarkdown h2,
     section[data-testid="stSidebar"] .stMarkdown h3 {
-        color: #f8fafc;
         font-size: 1.02rem !important;
         letter-spacing: -0.025em;
         margin-top: 1.15rem;
         margin-bottom: 0.55rem;
     }
 
-    section[data-testid="stSidebar"] label p {
-        color: #cbd5e1;
-        font-weight: 650;
-        font-size: 0.86rem;
-    }
-
     div[data-testid="stMetric"] {
-        background: linear-gradient(180deg, rgba(16, 23, 38, 0.82), rgba(8, 13, 24, 0.82));
+        background: var(--panel);
         border: 1px solid var(--border);
         padding: 14px 16px;
         border-radius: 18px;
-        box-shadow: 0 16px 34px rgba(0,0,0,0.18);
     }
-
-    div[data-testid="stMetricLabel"] p {
-        color: var(--muted);
-        font-weight: 560;
-    }
-
-    div[data-testid="stMetricValue"] {
-        font-weight: 780;
-        letter-spacing: -0.035em;
-    }
+    div[data-testid="stMetricLabel"] p { opacity: 0.75; font-weight: 560; }
+    div[data-testid="stMetricValue"] { font-weight: 780; letter-spacing: -0.035em; }
 
     .hero-card {
-        background:
-            linear-gradient(135deg, rgba(17, 24, 39, 0.96), rgba(3, 7, 18, 0.94)),
-            radial-gradient(circle at 5% 0%, rgba(214, 180, 106, 0.18), transparent 38%);
-        border: 1px solid rgba(214, 180, 106, 0.20);
+        background: var(--panel);
+        border: 1px solid var(--border);
         border-radius: 30px;
         padding: 30px 34px;
         margin: 10px 0 24px 0;
-        box-shadow: 0 28px 80px rgba(0,0,0,0.30);
+        box-shadow: 0 18px 50px rgba(0,0,0,0.12);
     }
 
-    .classification-card {
-        background: rgba(12, 18, 30, 0.64);
-        border: 1px solid var(--border-soft);
-        border-radius: 22px;
-        padding: 18px 20px;
-        margin: 14px 0 18px 0;
-    }
-
-    .section-card {
-        background: linear-gradient(180deg, rgba(12, 18, 30, 0.72), rgba(8, 13, 24, 0.68));
-        border: 1px solid var(--border-soft);
-        border-radius: 24px;
-        padding: 22px 24px;
-        margin: 18px 0;
-        box-shadow: 0 18px 40px rgba(0,0,0,0.16);
-    }
+    .classification-card { background: var(--panel); border: 1px solid var(--border-soft); border-radius: 22px; padding: 18px 20px; margin: 14px 0 18px 0; }
+    .section-card { background: var(--panel); border: 1px solid var(--border-soft); border-radius: 24px; padding: 22px 24px; margin: 18px 0; box-shadow: 0 12px 30px rgba(0,0,0,0.08); }
 
     .signal-card {
-        background:
-            linear-gradient(180deg, rgba(15, 23, 42, 0.72), rgba(8, 13, 24, 0.72));
-        border: 1px solid rgba(148, 163, 184, 0.12);
+        background: var(--panel);
+        border: 1px solid var(--border-soft);
         border-radius: 20px;
         padding: 16px 17px;
         min-height: 124px;
         margin-bottom: 12px;
-        box-shadow: 0 14px 34px rgba(0, 0, 0, 0.16);
-        transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+        box-shadow: 0 10px 24px rgba(0,0,0,0.08);
+        transition: transform 160ms ease, border-color 160ms ease;
     }
+    .signal-card:hover { transform: translateY(-1px); border-color: var(--border); }
+    .signal-pass { border-top: 2px solid rgba(22,163,74,0.6); }
+    .signal-fail { border-top: 2px solid rgba(128,128,128,0.35); }
+    .signal-mixed { border-top: 2px solid rgba(217,119,6,0.55); }
 
-    .signal-card:hover {
-        transform: translateY(-1px);
-        border-color: rgba(214, 180, 106, 0.26);
-        background: linear-gradient(180deg, rgba(20, 30, 48, 0.78), rgba(8, 13, 24, 0.76));
-    }
-
-    .signal-pass {
-        border-top: 1px solid rgba(74, 222, 128, 0.35);
-        box-shadow: inset 0 1px 0 rgba(74, 222, 128, 0.13), 0 14px 34px rgba(0,0,0,0.16);
-    }
-
-    .signal-fail {
-        border-top: 1px solid rgba(148, 163, 184, 0.22);
-    }
-
-    .signal-mixed {
-        border-top: 1px solid rgba(251, 191, 36, 0.32);
-    }
-
-    .small-muted {
-        color: var(--muted);
-        font-size: 0.88rem;
-        font-weight: 500;
-    }
-
+    .small-muted { opacity: 0.72; font-size: 0.88rem; font-weight: 500; }
     .micro-muted {
         color: var(--gold);
-        opacity: 0.82;
+        opacity: 0.95;
         font-size: 0.72rem;
         text-transform: uppercase;
         letter-spacing: 0.13em;
         font-weight: 800;
     }
-
-    .big-level {
-        font-size: 1.38rem;
-        font-weight: 820;
-        letter-spacing: -0.04em;
-    }
+    .big-level { font-size: 1.38rem; font-weight: 820; letter-spacing: -0.04em; }
 
     .pill {
         display:inline-flex;
         align-items:center;
         padding: 5px 10px;
         border-radius: 999px;
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        background: rgba(2, 6, 23, 0.45);
-        color: var(--muted);
+        border: 1px solid var(--border-soft);
+        background: var(--panel-2);
         font-size: 0.80rem;
         font-weight: 750;
         margin-right: 8px;
         margin-bottom: 8px;
     }
-
-    .pill-green { color: #86efac; border-color: rgba(74, 222, 128, 0.35); background: var(--green-soft); }
-    .pill-amber { color: #fde68a; border-color: rgba(251, 191, 36, 0.36); background: var(--amber-soft); }
-    .pill-slate { color: #cbd5e1; border-color: rgba(148, 163, 184, 0.22); background: var(--slate-soft); }
-    .pill-gold { color: #f5e6b8; border-color: rgba(214, 180, 106, 0.36); background: var(--gold-soft); }
+    /* Mid-tone accents chosen to read on BOTH light and dark backgrounds. */
+    .pill-green { color: #16a34a; border-color: rgba(22,163,74,0.45); background: rgba(22,163,74,0.13); }
+    .pill-amber { color: #d97706; border-color: rgba(217,119,6,0.45); background: rgba(217,119,6,0.13); }
+    .pill-slate { color: #6b7280; border-color: rgba(128,128,128,0.40); background: rgba(128,128,128,0.12); }
+    .pill-gold { color: var(--gold-strong); border-color: rgba(199,154,58,0.45); background: var(--gold-soft); }
 
     .explain-box {
-        background: linear-gradient(180deg, rgba(2, 6, 23, 0.56), rgba(12, 18, 30, 0.48));
-        border: 1px solid rgba(214, 180, 106, 0.14);
+        background: var(--panel);
+        border: 1px solid var(--border);
         border-radius: 18px;
         padding: 15px 16px;
-        color: #cbd5e1;
         line-height: 1.58;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
     }
 
     .insight-panel {
-        background: rgba(7, 12, 22, 0.42);
-        border: 1px solid rgba(214, 180, 106, 0.10);
+        background: var(--panel);
+        border: 1px solid var(--border);
         border-radius: 24px;
         padding: 18px 18px 8px 18px;
         min-height: 100%;
     }
 
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        border-bottom: 1px solid rgba(214, 180, 106, 0.13);
-    }
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; border-bottom: 1px solid var(--border); }
+    .stTabs [data-baseweb="tab"] { border-radius: 999px 999px 0 0; padding: 10px 18px; font-weight: 700; }
+    .stTabs [aria-selected="true"] { color: var(--gold) !important; }
 
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 999px 999px 0 0;
-        padding: 10px 18px;
-        font-weight: 700;
-        color: #94a3b8;
-    }
-
-    .stTabs [aria-selected="true"] {
-        color: #f5e6b8 !important;
-    }
-
-    div[data-testid="stDataFrame"] {
-        border-radius: 16px;
-        overflow: hidden;
-        border: 1px solid rgba(214, 180, 106, 0.12);
-    }
+    div[data-testid="stDataFrame"] { border-radius: 16px; overflow: hidden; border: 1px solid var(--border-soft); }
 
     .stButton > button {
-        border: 1px solid rgba(214, 180, 106, 0.38) !important;
-        background: linear-gradient(135deg, #d6b46a, #8b6f34) !important;
-        color: #070b12 !important;
+        border: 1px solid rgba(199,154,58,0.50) !important;
+        background: linear-gradient(135deg, #d6b46a, #a9852f) !important;
+        color: #1a1205 !important;
         font-weight: 800 !important;
         border-radius: 14px !important;
         padding: 0.62rem 1.05rem !important;
-        box-shadow: 0 12px 26px rgba(214, 180, 106, 0.16) !important;
+        box-shadow: 0 10px 24px rgba(199,154,58,0.18) !important;
     }
-
-    .stButton > button:hover {
-        border-color: rgba(245, 230, 184, 0.65) !important;
-        filter: brightness(1.06);
-    }
-
-    div[data-baseweb="input"], div[data-baseweb="select"] > div, div[data-baseweb="popover"] {
-        background-color: rgba(7, 12, 22, 0.95) !important;
-        border-color: rgba(214, 180, 106, 0.12) !important;
-        border-radius: 14px !important;
-    }
+    .stButton > button:hover { border-color: rgba(199,154,58,0.75) !important; filter: brightness(1.05); }
 
     div[data-baseweb="tag"] {
-        background: rgba(214, 180, 106, 0.16) !important;
-        border: 1px solid rgba(214, 180, 106, 0.28) !important;
-        color: #f5e6b8 !important;
+        background: var(--gold-soft) !important;
+        border: 1px solid var(--border) !important;
+        color: var(--gold-strong) !important;
         border-radius: 999px !important;
         font-weight: 700 !important;
     }
+    div[data-baseweb="tag"] span { color: var(--gold-strong) !important; }
 
-    div[data-baseweb="tag"] span {
-        color: #f5e6b8 !important;
-    }
+    div[data-testid="stSlider"] [role="slider"] { background: #c79a3a !important; border-color: var(--gold-strong) !important; }
+    div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div { background-color: rgba(199,154,58,0.45) !important; }
 
-    div[data-testid="stSlider"] [role="slider"] {
-        background: #d6b46a !important;
-        border-color: #f5e6b8 !important;
-    }
-
-    div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div {
-        background-color: rgba(214, 180, 106, 0.35) !important;
-    }
-
-    .stCheckbox [data-testid="stWidgetLabel"] p {
-        color: #cbd5e1;
-    }
-
-    details {
-        border-radius: 18px !important;
-    }
+    details { border-radius: 18px !important; }
 </style>
 """
-
-
-# Light-theme overrides. The block above is the dark design (kept intact so dark
-# mode is unchanged); these rules are appended ONLY when the active theme is
-# light, swapping the hardcoded dark backgrounds/text for light equivalents.
-APP_CSS_LIGHT_OVERRIDES = """
-<style>
-    :root {
-        --panel: rgba(255,255,255,0.90);
-        --panel-2: rgba(248,250,252,0.90);
-        --panel-3: rgba(241,245,249,0.70);
-        --border: rgba(180,140,60,0.30);
-        --border-soft: rgba(100,116,139,0.22);
-        --text: #0f172a;
-        --muted: #475569;
-        --muted-2: #64748b;
-        --gold: #b8860b;
-        --gold-soft: rgba(184,134,11,0.12);
-        --green: #16a34a;
-        --green-soft: rgba(22,163,74,0.12);
-        --amber: #d97706;
-        --amber-soft: rgba(217,119,6,0.12);
-        --slate-soft: rgba(100,116,139,0.10);
-        --blue: #2563eb;
-    }
-    .stApp {
-        background:
-            radial-gradient(circle at 20% -10%, rgba(184,134,11,0.10), transparent 30%),
-            radial-gradient(circle at 88% 8%, rgba(59,130,246,0.08), transparent 28%),
-            linear-gradient(180deg, #f7f8fb 0%, #eef1f6 46%, #f7f8fb 100%);
-        color: var(--text);
-    }
-    section[data-testid="stSidebar"] {
-        background:
-            linear-gradient(180deg, rgba(255,255,255,0.98), rgba(244,247,251,0.98)),
-            radial-gradient(circle at top, rgba(184,134,11,0.06), transparent 35%);
-        border-right: 1px solid rgba(180,140,60,0.18);
-        box-shadow: 18px 0 55px rgba(15,23,42,0.06);
-    }
-    section[data-testid="stSidebar"] h2,
-    section[data-testid="stSidebar"] h3,
-    section[data-testid="stSidebar"] .stMarkdown h1,
-    section[data-testid="stSidebar"] .stMarkdown h2,
-    section[data-testid="stSidebar"] .stMarkdown h3 { color: #0f172a; }
-    section[data-testid="stSidebar"] label p { color: #334155; }
-    div[data-testid="stMetric"] {
-        background: linear-gradient(180deg, #ffffff, #f6f8fb);
-        border: 1px solid var(--border);
-        box-shadow: 0 10px 24px rgba(15,23,42,0.06);
-    }
-    .hero-card {
-        background:
-            linear-gradient(135deg, #ffffff, #f4f7fb),
-            radial-gradient(circle at 5% 0%, rgba(184,134,11,0.10), transparent 38%);
-        border: 1px solid rgba(180,140,60,0.28);
-        box-shadow: 0 20px 50px rgba(15,23,42,0.10);
-    }
-    .classification-card { background: rgba(255,255,255,0.75); border: 1px solid var(--border-soft); }
-    .section-card {
-        background: linear-gradient(180deg, #ffffff, #f6f8fb);
-        border: 1px solid var(--border-soft);
-        box-shadow: 0 12px 28px rgba(15,23,42,0.06);
-    }
-    .signal-card {
-        background: linear-gradient(180deg, #ffffff, #f5f8fc);
-        border: 1px solid rgba(100,116,139,0.18);
-        box-shadow: 0 10px 24px rgba(15,23,42,0.06);
-    }
-    .signal-card:hover {
-        border-color: rgba(184,134,11,0.35);
-        background: linear-gradient(180deg, #ffffff, #eef3fa);
-    }
-    .signal-pass { border-top: 1px solid rgba(22,163,74,0.5); box-shadow: inset 0 1px 0 rgba(22,163,74,0.18), 0 10px 24px rgba(15,23,42,0.06); }
-    .signal-fail { border-top: 1px solid rgba(100,116,139,0.30); }
-    .signal-mixed { border-top: 1px solid rgba(217,119,6,0.45); }
-    .explain-box {
-        background: linear-gradient(180deg, #ffffff, #f3f6fb);
-        border: 1px solid rgba(184,134,11,0.20);
-        color: #334155;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
-    }
-    .insight-panel { background: rgba(255,255,255,0.60); border: 1px solid rgba(184,134,11,0.14); }
-    .pill { border: 1px solid rgba(100,116,139,0.25); background: rgba(241,245,249,0.80); color: var(--muted); }
-    .pill-green { color: #15803d; border-color: rgba(22,163,74,0.40); background: var(--green-soft); }
-    .pill-amber { color: #b45309; border-color: rgba(217,119,6,0.40); background: var(--amber-soft); }
-    .pill-slate { color: #475569; border-color: rgba(100,116,139,0.30); background: var(--slate-soft); }
-    .pill-gold { color: #92700f; border-color: rgba(184,134,11,0.40); background: var(--gold-soft); }
-    .stTabs [data-baseweb="tab-list"] { border-bottom: 1px solid rgba(184,134,11,0.20); }
-    .stTabs [data-baseweb="tab"] { color: #64748b; }
-    .stTabs [aria-selected="true"] { color: #92700f !important; }
-    div[data-testid="stDataFrame"] { border: 1px solid rgba(100,116,139,0.18); }
-    div[data-baseweb="input"], div[data-baseweb="select"] > div, div[data-baseweb="popover"] {
-        background-color: #ffffff !important;
-        border-color: rgba(100,116,139,0.30) !important;
-    }
-    div[data-baseweb="tag"] {
-        background: rgba(184,134,11,0.14) !important;
-        border: 1px solid rgba(184,134,11,0.35) !important;
-        color: #92700f !important;
-    }
-    div[data-baseweb="tag"] span { color: #92700f !important; }
-    div[data-testid="stSlider"] [role="slider"] { background: #b8860b !important; border-color: #92700f !important; }
-    div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div { background-color: rgba(184,134,11,0.40) !important; }
-    .stCheckbox [data-testid="stWidgetLabel"] p { color: #334155; }
-</style>
-"""
-
-
-def active_theme() -> str:
-    """Return the viewer's active Streamlit theme ('light' or 'dark').
-
-    Reads st.context.theme (reflects the runtime theme toggle, not just config).
-    Falls back to 'dark' — the app's original design — if unavailable.
-    """
-    try:
-        t = st.context.theme
-        typ = t.get("type") if isinstance(t, dict) else getattr(t, "type", None)
-        if typ in ("light", "dark"):
-            return typ
-    except Exception:
-        pass
-    return "dark"
-
-
-def style_chart(fig: "go.Figure") -> "go.Figure":
-    """Make a Plotly figure blend into whichever app theme is active.
-
-    Transparent backgrounds let the figure inherit the page background (dark or
-    light); the template + font color keep gridlines/text legible in both. Call
-    st.plotly_chart(..., theme=None) so Streamlit does not re-theme over this.
-    """
-    if active_theme() == "light":
-        fig.update_layout(template="plotly_white", font_color="#0f172a")
-    else:
-        fig.update_layout(template="plotly_dark", font_color="#e2e8f0")
-    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    return fig
 
 
 # -----------------------------------------------------------------------------
@@ -3364,7 +3089,7 @@ def render_indicator_cards(signals: List[SignalResult]) -> None:
                         <div class="micro-muted">{status}</div>
                         <div style="font-size:0.98rem;font-weight:760;margin-top:4px;letter-spacing:-0.02em;">{s.name}</div>
                         <div style="margin:8px 0 8px 0;"><span class="pill {pill_class}">{s.points:.1f} / {s.max_points:.0f}</span></div>
-                        <div style="line-height:1.48;color:var(--text);font-size:0.92rem;">{s.explanation}</div>
+                        <div style="line-height:1.48;font-size:0.92rem;opacity:0.9;">{s.explanation}</div>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -3452,7 +3177,7 @@ def render_final_verdict_card(
                 <div><div class="small-muted">Current price</div><div class="big-level">{latest_close:,.2f}</div></div>
                 <div><div class="small-muted">Final confidence</div><div class="big-level">{final_score:.1f}/100</div></div>
             </div>
-            <div style="margin-top:18px;line-height:1.55;color:var(--muted);">
+            <div style="margin-top:18px;line-height:1.55;opacity:0.8;">
                 Base technical score: <b>{base_score:.1f}/100</b> · Backtest adjustment:
                 <b>{backtest.confidence_adjustment:+.0f}</b> · Historical core-condition signals: <b>{backtest.sample_size}</b> ·
                 Hit rate: <b>{backtest.hit_rate:.1%}</b> vs random-entry baseline <b>{backtest.baseline_hit_rate:.1%}</b> ·
@@ -4046,7 +3771,7 @@ def plot_indicator_chart_grid(
             chart_name = chosen[idx]
             with col:
                 try:
-                    st.plotly_chart(style_chart(chart_builders[chart_name]()), theme=None, use_container_width=True)
+                    st.plotly_chart(chart_builders[chart_name](), use_container_width=True)
                     explanation = CHART_EXPLANATIONS.get(chart_name)
                     if explanation:
                         st.caption(explanation)
@@ -4209,7 +3934,7 @@ def render_production_screens(screens: List[SignalResult]) -> None:
 
 def main() -> None:
     st.markdown(
-        APP_CSS + (APP_CSS_LIGHT_OVERRIDES if active_theme() == "light" else ""),
+        APP_CSS,
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -4421,15 +4146,12 @@ def main() -> None:
             chart_lookback = st.slider("Chart zoom (days shown)", 30, 1000, 365, step=30, key="main_chart_lookback")
 
         st.plotly_chart(
-            style_chart(
-                plot_price_chart(
-                    df.tail(chart_lookback),
-                    context,
-                    overlays=main_chart_overlays,
-                    title="Main price chart — selected overlays only",
-                )
+            plot_price_chart(
+                df.tail(chart_lookback),
+                context,
+                overlays=main_chart_overlays,
+                title="Main price chart — selected overlays only",
             ),
-            theme=None,
             use_container_width=True,
         )
 
@@ -4493,7 +4215,7 @@ def main() -> None:
         c4.metric("Median Forward Return", f"{backtest.median_forward_return:.1%}")
         c5.metric("Confidence Adj.", f"{backtest.confidence_adjustment:+.0f}")
 
-        st.plotly_chart(style_chart(plot_backtest_trades(trades)), theme=None, use_container_width=True)
+        st.plotly_chart(plot_backtest_trades(trades), use_container_width=True)
 
         if not trades.empty:
             display_trades = trades.copy()
