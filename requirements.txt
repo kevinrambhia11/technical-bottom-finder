@@ -4,3 +4,12 @@ pandas==3.0.3
 numpy==2.4.6
 plotly==6.8.0
 scikit-learn==1.9.0
+# Native transitive dependencies pinned to the verified-working set.
+# Streamlit imports pyarrow at startup; an unpinned redeploy resolved the
+# freshly released pyarrow 25.0.0, which segfaulted the server on launch
+# (binary incompatibility with the pinned pandas). Keep these in lockstep
+# with the versions above when upgrading.
+pyarrow==24.0.0
+scipy==1.17.1
+protobuf==7.35.1
+pillow==12.3.0
