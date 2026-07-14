@@ -3802,7 +3802,16 @@ def display_mtf_states(states: Dict[str, Dict[str, object]]) -> None:
 # Cached end-to-end analysis pipeline
 # -----------------------------------------------------------------------------
 
-@st.cache_data(show_spinner=False, ttl=60 * 30)
+# cache_resource (NOT cache_data) is deliberate: the returned dict contains
+# instances of dataclasses defined in this script (SignalResult, Zone,
+# BacktestResult). Under `streamlit run`, the script executes with
+# __name__ == "__main__" while sys.modules["__main__"] is Streamlit's CLI
+# module, so pickle cannot resolve those classes — cache_data's serialization
+# raises UnserializableReturnValueError (observed on Python 3.14, whose pickle
+# is stricter). cache_resource stores the object by reference with no pickling.
+# The cached dict must therefore be treated as READ-ONLY by all consumers
+# (they only read or .copy() today — keep it that way).
+@st.cache_resource(show_spinner=False, ttl=60 * 30, max_entries=64)
 def run_full_analysis(
     ticker: str,
     period: str,
