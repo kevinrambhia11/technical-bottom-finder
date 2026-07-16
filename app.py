@@ -433,11 +433,30 @@ class NoMarketDataError(RuntimeError):
     of serving a poisoned empty result for the whole TTL.
     """
 
-    def __init__(self, ticker: str):
-        super().__init__(
-            f"No data returned for '{ticker}' — invalid symbol, or the data provider is rate-limiting."
-        )
+    def __init__(self, ticker: str, reason: str = ""):
+        msg = f"No data returned for '{ticker}' — invalid symbol, or the data provider is rate-limiting."
+        if reason:
+            msg += f" Provider said: {reason}"
+        super().__init__(msg)
         self.ticker = ticker
+        self.reason = reason
+
+
+def _yf_failure_reason(ticker: str) -> str:
+    """Return yfinance's recorded failure reason for a ticker, if any.
+
+    yfinance swallows download errors and stores them per-ticker in
+    yfinance.shared._ERRORS; surfacing this turns an opaque empty result into
+    an actionable message (e.g. 'YFRateLimitError: Too Many Requests').
+    """
+    try:
+        import yfinance.shared as _yf_shared
+
+        errors = getattr(_yf_shared, "_ERRORS", {}) or {}
+        reason = errors.get(ticker.upper()) or errors.get(ticker)
+        return str(reason)[:200] if reason else ""
+    except Exception:
+        return ""
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 30)
@@ -468,6 +487,7 @@ def fetch_ohlcv(
     # nothing bad enters the cache.
     df = None
     last_exc: Optional[Exception] = None
+    reason = ""
     for attempt in range(3):
         try:
             if start:
@@ -477,15 +497,16 @@ def fetch_ohlcv(
             last_exc = None
             if df is not None and not df.empty:
                 break
+            reason = _yf_failure_reason(ticker) or reason
         except Exception as exc:  # transient provider/network/rate-limit error
             last_exc = exc
         if attempt < 2:
-            time.sleep(0.8 * (attempt + 1))
+            time.sleep(1.5 * (attempt + 1))
     if last_exc is not None:
         raise last_exc
 
     if df is None or df.empty:
-        raise NoMarketDataError(ticker)
+        raise NoMarketDataError(ticker, reason)
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
@@ -493,13 +514,13 @@ def fetch_ohlcv(
     required = ["Open", "High", "Low", "Close", "Volume"]
     missing = [col for col in required if col not in df.columns]
     if missing:
-        raise NoMarketDataError(ticker)
+        raise NoMarketDataError(ticker, f"response missing columns {missing}")
 
     df = df[required].copy()
     df = df.dropna()
     df.index = pd.to_datetime(df.index)
     if df.empty:
-        raise NoMarketDataError(ticker)
+        raise NoMarketDataError(ticker, "all rows were NaN after cleaning")
     return df
 
 
@@ -3859,10 +3880,10 @@ def run_full_analysis(
     """
     try:
         df = load_analysis_frame(ticker, period)
-    except NoMarketDataError:
-        return {"error": "no_data"}
+    except NoMarketDataError as exc:
+        return {"error": "no_data", "error_detail": exc.reason}
     if df.empty:
-        return {"error": "no_data"}
+        return {"error": "no_data", "error_detail": ""}
 
     if float(df["Volume"].fillna(0).sum()) == 0:
         return {"error": "no_volume"}
@@ -4117,12 +4138,14 @@ def main() -> None:
 
     error = analysis.get("error")
     if error == "no_data":
+        detail = str(analysis.get("error_detail") or "").strip()
         st.error(
             "No market data returned for this ticker. Two possible causes: the symbol is wrong "
             "(use .NS for NSE stocks, e.g. RELIANCE.NS), or the data provider is rate-limiting the "
             "server (common on Streamlit Cloud, even for valid tickers like NVDA). If the symbol is "
             "correct, wait a minute and press Analyze again — failed lookups are not cached, so "
             "retrying is safe and usually succeeds."
+            + (f"\n\n**Provider response:** {detail}" if detail else "")
         )
         return
     if error == "no_volume":
