@@ -422,6 +422,24 @@ def load_signal_history(db_path: Path = DB_PATH, limit: int = 500) -> pd.DataFra
 # Data fetching
 # -----------------------------------------------------------------------------
 
+class NoMarketDataError(RuntimeError):
+    """The data provider returned no usable rows for a ticker.
+
+    Either the symbol is invalid, or Yahoo throttled the request by answering
+    with an EMPTY payload (its common rate-limit behavior on shared-IP hosts
+    like Streamlit Cloud — yfinance swallows the error and returns an empty
+    frame). Raising instead of returning empty keeps the failure OUT of the
+    st.cache_data cache, so a retry a minute later actually re-fetches instead
+    of serving a poisoned empty result for the whole TTL.
+    """
+
+    def __init__(self, ticker: str):
+        super().__init__(
+            f"No data returned for '{ticker}' — invalid symbol, or the data provider is rate-limiting."
+        )
+        self.ticker = ticker
+
+
 @st.cache_data(show_spinner=False, ttl=60 * 30)
 def fetch_ohlcv(
     ticker: str,
@@ -433,6 +451,10 @@ def fetch_ohlcv(
 
     When `start` is given it takes precedence over `period`, which allows the
     caller to request extra warm-up history beyond the named period.
+
+    Raises NoMarketDataError (never returns an empty frame) when nothing usable
+    comes back, so failures are not cached; raises the underlying exception for
+    network/provider errors. Only successful fetches are cached.
     """
     kwargs = dict(
         interval=interval,
@@ -440,11 +462,10 @@ def fetch_ohlcv(
         progress=False,
         group_by="column",
     )
-    # Retry with backoff. Yahoo aggressively rate-limits shared IPs (notably
-    # Streamlit Community Cloud), where a burst of requests gets some through and
-    # then 429s the rest. On the final failure we RE-RAISE rather than return
-    # empty, so the failure is NOT cached and the next scan retries this ticker
-    # (successful fetches ARE cached for the TTL).
+    # Retry with backoff. Yahoo rate-limits shared IPs (notably Streamlit
+    # Cloud) in two ways: raising an error, OR answering with an empty payload.
+    # Both are treated as transient and retried; both raise on final failure so
+    # nothing bad enters the cache.
     df = None
     last_exc: Optional[Exception] = None
     for attempt in range(3):
@@ -454,16 +475,17 @@ def fetch_ohlcv(
             else:
                 df = yf.download(ticker, period=period, **kwargs)
             last_exc = None
-            break
+            if df is not None and not df.empty:
+                break
         except Exception as exc:  # transient provider/network/rate-limit error
             last_exc = exc
-            if attempt < 2:
-                time.sleep(0.8 * (attempt + 1))
+        if attempt < 2:
+            time.sleep(0.8 * (attempt + 1))
     if last_exc is not None:
         raise last_exc
 
     if df is None or df.empty:
-        return pd.DataFrame()
+        raise NoMarketDataError(ticker)
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
@@ -471,11 +493,13 @@ def fetch_ohlcv(
     required = ["Open", "High", "Low", "Close", "Volume"]
     missing = [col for col in required if col not in df.columns]
     if missing:
-        return pd.DataFrame()
+        raise NoMarketDataError(ticker)
 
     df = df[required].copy()
     df = df.dropna()
     df.index = pd.to_datetime(df.index)
+    if df.empty:
+        raise NoMarketDataError(ticker)
     return df
 
 
@@ -3833,7 +3857,10 @@ def run_full_analysis(
     pipeline here means cosmetic changes (chart overlays, lookback sliders)
     re-render instantly instead of re-paying several seconds of computation.
     """
-    df = load_analysis_frame(ticker, period)
+    try:
+        df = load_analysis_frame(ticker, period)
+    except NoMarketDataError:
+        return {"error": "no_data"}
     if df.empty:
         return {"error": "no_data"}
 
@@ -3846,10 +3873,20 @@ def run_full_analysis(
 
     # Benchmarks go through the same warm-up loader as the primary ticker so
     # the market-regime filter (which needs ~270 warm-up rows for SMA200 and
-    # HV percentile) stays evaluable on shorter periods like 2y.
-    sector_df = load_analysis_frame(sector_ticker.strip().upper(), period) if sector_ticker.strip() else pd.DataFrame()
-    market_df = load_analysis_frame(market_ticker.strip().upper(), period) if market_ticker.strip() else pd.DataFrame()
-    volatility_df = load_analysis_frame(volatility_ticker.strip().upper(), period) if volatility_ticker.strip() else pd.DataFrame()
+    # HV percentile) stays evaluable on shorter periods like 2y. A failed
+    # benchmark fetch (bad symbol / rate-limit) must never sink the whole
+    # analysis — the corresponding screen is simply excluded.
+    def _benchmark(t: str) -> pd.DataFrame:
+        if not t.strip():
+            return pd.DataFrame()
+        try:
+            return load_analysis_frame(t.strip().upper(), period)
+        except Exception:
+            return pd.DataFrame()
+
+    sector_df = _benchmark(sector_ticker)
+    market_df = _benchmark(market_ticker)
+    volatility_df = _benchmark(volatility_ticker)
 
     try:
         base_score, signals, context = calculate_bottom_score(
@@ -4080,7 +4117,13 @@ def main() -> None:
 
     error = analysis.get("error")
     if error == "no_data":
-        st.error("No market data found. Check the ticker symbol (use .NS for NSE stocks) or try a different period.")
+        st.error(
+            "No market data returned for this ticker. Two possible causes: the symbol is wrong "
+            "(use .NS for NSE stocks, e.g. RELIANCE.NS), or the data provider is rate-limiting the "
+            "server (common on Streamlit Cloud, even for valid tickers like NVDA). If the symbol is "
+            "correct, wait a minute and press Analyze again — failed lookups are not cached, so "
+            "retrying is safe and usually succeeds."
+        )
         return
     if error == "no_volume":
         st.error(
@@ -4325,6 +4368,8 @@ def main() -> None:
                                         verdict=batch_verdict,
                                     )
 
+                            except NoMarketDataError:
+                                rows.append({"Ticker": batch_ticker, "Status": "No data (bad symbol or rate-limited — re-run to retry)"})
                             except Exception as exc:
                                 rows.append({"Ticker": batch_ticker, "Status": f"Error: {exc}"})
                             finally:
